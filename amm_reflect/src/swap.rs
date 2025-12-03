@@ -127,6 +127,7 @@ pub enum Swap {
     TesseraV {
         side: Side,
     },
+    ReflectS1
 }
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum AccountsType {
