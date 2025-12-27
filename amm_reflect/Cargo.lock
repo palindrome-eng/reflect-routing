@@ -124,7 +124,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "amm_reflect"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -6733,9 +6733,9 @@ dependencies = [
 
 [[package]]
 name = "usdc-plus-exchange"
-version = "0.1.5"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc20a5a1a69004c7eaa0bb37360c95472b32f5dac3c6899523a79bfdba9559d8"
+checksum = "9c204513f0832f118334d2febb2df2ac180e213abdaa67e8d18216fc77c9acf1"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
