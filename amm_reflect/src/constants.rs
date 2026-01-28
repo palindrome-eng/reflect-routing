@@ -104,6 +104,12 @@ pub mod usdc_mint {
     pub fn id() -> Pubkey { ID }
 }
 
+pub mod usdt_mint {
+    use super::*;
+    pub const ID: Pubkey = pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
+    pub fn id() -> Pubkey { ID }
+}
+
 pub mod token_program {
     use super::*;
     pub const ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
