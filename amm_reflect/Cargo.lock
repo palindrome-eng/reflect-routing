@@ -124,7 +124,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "amm_reflect"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -2949,9 +2949,9 @@ dependencies = [
 
 [[package]]
 name = "reflect-exchange-rates"
-version = "0.1.2"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d9013840bfbfd1be064cc09d170beae95b291bc652b5ca84dd92988780847e6"
+checksum = "aaa2d46e054322977b294a496ba95d46dfe9ba4dd0b6e4407b2ec25a3b7e0d64"
 dependencies = [
  "anchor-lang",
  "anchor-spl",

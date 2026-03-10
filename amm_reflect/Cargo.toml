@@ -1,6 +1,6 @@
 [package]
 name = "amm_reflect"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [dependencies]
@@ -13,4 +13,4 @@ rust_decimal = "1.36.0"
 ahash = "0.8"
 solana-client = "2.1.0"
 base64ct = "=1.7.3"
-reflect-exchange-rates = "=0.1.2"
+reflect-exchange-rates = "=0.1.6"

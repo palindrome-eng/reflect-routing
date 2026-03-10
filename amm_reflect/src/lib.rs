@@ -9,9 +9,9 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::sync::Arc;
 use std::{collections::HashMap, convert::TryFrom, str::FromStr};
+mod constants;
 mod custom_serde;
 mod swap;
-mod constants;
 pub use constants::*;
 use custom_serde::field_as_string;
 pub use swap::{AccountsType, RemainingAccountsInfo, RemainingAccountsSlice, Side, Swap};
@@ -21,16 +21,14 @@ use solana_sdk::{account::Account, instruction::AccountMeta, pubkey::Pubkey};
 
 // Import reflect-exchange-rates functions
 use reflect_exchange_rates::accounts_api::{
-    get_tvl_accounts_usdc, get_tvl_accounts_usdt,
-    get_supply_change_accounts_usdc, get_supply_change_accounts_usdt,
+    get_supply_change_accounts_usdc, get_supply_change_accounts_usdt, get_tvl_accounts_usdc,
+    get_tvl_accounts_usdt,
 };
 use reflect_exchange_rates::usdc_plus_exchange::{
-    exchange_amount_usdc_data, exchange_amount_usdc_plus_data,
-    get_exchange_components_usdc_data,
+    exchange_amount_usdc_data, exchange_amount_usdc_plus_data, get_exchange_components_usdc_data,
 };
 use reflect_exchange_rates::usdt_plus_exchange::{
-    exchange_amount_usdt_data, exchange_amount_usdt_plus_data,
-    get_exchange_components_usdt_data,
+    exchange_amount_usdt_data, exchange_amount_usdt_plus_data, get_exchange_components_usdt_data,
 };
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Default, Debug)]
@@ -52,7 +50,6 @@ impl FromStr for SwapMode {
     }
 }
 
-
 /// Route type for Reflect AMM (USDC or USDT)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ReflectRoute {
@@ -63,10 +60,10 @@ pub enum ReflectRoute {
 impl ReflectRoute {
     pub fn from_mints(input_mint: &Pubkey, output_mint: &Pubkey) -> Result<Self> {
         let usdc_mint = usdc_mint::ID;
-        let usdc_plus_mint = usdc_plus_mint::ID;
+        let usdc_plus_mint = reflect_exchange_rates::ids::usdc_plus_mint::ID;
         let usdt_mint = usdt_mint::ID;
         let usdt_plus_mint = reflect_exchange_rates::ids::usdt_plus_mint::ID;
-        
+
         if (*input_mint == usdc_mint && *output_mint == usdc_plus_mint)
             || (*input_mint == usdc_plus_mint && *output_mint == usdc_mint)
         {
@@ -83,24 +80,24 @@ impl ReflectRoute {
             ))
         }
     }
-    
+
     pub fn base_mint(&self) -> Pubkey {
         match self {
             ReflectRoute::Usdc => usdc_mint::ID,
             ReflectRoute::Usdt => usdt_mint::ID,
         }
     }
-    
+
     pub fn receipt_mint(&self) -> Pubkey {
         match self {
-            ReflectRoute::Usdc => usdc_plus_mint::ID,
+            ReflectRoute::Usdc => reflect_exchange_rates::ids::usdc_plus_mint::ID,
             ReflectRoute::Usdt => reflect_exchange_rates::ids::usdt_plus_mint::ID,
         }
     }
-    
+
     pub fn controller(&self) -> Pubkey {
         match self {
-            ReflectRoute::Usdc => usdc_controller::ID,
+            ReflectRoute::Usdc => reflect_exchange_rates::ids::usdc_controller::ID,
             ReflectRoute::Usdt => reflect_exchange_rates::ids::usdt_controller::ID,
         }
     }
@@ -182,21 +179,21 @@ pub struct AmmContext {
 pub struct ReflectAmm {
     pub label: String,
     pub program_id: Pubkey,
-    
+
     // Core accounts
     pub main: Pubkey,
     pub admin_permissions: Pubkey,
-    
+
     // Route-specific state
     pub route: Option<ReflectRoute>,
-    
+
     // Cached controller data for TVL/exchange calculations
     pub controller_data: Option<Vec<u8>>,
     pub receipt_mint_data: Option<Vec<u8>>,
-    
+
     // Protocol account data (dynamic, fetched from controller)
     pub protocol_account_data: Vec<Vec<u8>>,
-    
+
     // Rates (cached)
     pub protocol_tvl: u64,
     pub effective_supply: u64,
@@ -204,31 +201,35 @@ pub struct ReflectAmm {
 
 impl ReflectAmm {
     pub fn new() -> Self {
-        ReflectAmm {            
+        ReflectAmm {
             label: REFLECT_LABEL.to_owned(),
             program_id: reflect::ID,
-            
+
             // Core accounts
             main: reflect_main::ID,
             admin_permissions: admin_permissions::ID,
-            
+
             route: None,
             controller_data: None,
             receipt_mint_data: None,
             protocol_account_data: Vec::new(),
-            
+
             // Rates
             protocol_tvl: 0,
             effective_supply: 0,
         }
     }
-    
+
     /// Determine route from mints and set it
-    pub fn set_route_from_mints(&mut self, input_mint: &Pubkey, output_mint: &Pubkey) -> Result<()> {
+    pub fn set_route_from_mints(
+        &mut self,
+        input_mint: &Pubkey,
+        output_mint: &Pubkey,
+    ) -> Result<()> {
         self.route = Some(ReflectRoute::from_mints(input_mint, output_mint)?);
         Ok(())
     }
-    
+
     /// Get the current route, or determine it from reserve mints
     pub fn get_route(&self) -> Option<ReflectRoute> {
         self.route
@@ -300,14 +301,16 @@ pub trait Amm {
     /// Provides a shortcut to establish if the AMM can be used for trading
     /// If the market is active at all
     fn is_active(&self) -> bool {
-
         // This could be the check for the bool which blocks mint,
         true
     }
 }
 
 impl Amm for ReflectAmm {
-    fn from_keyed_account(_keyed_account: &KeyedAccount, _amm_context: &AmmContext) -> Result<Self> {       
+    fn from_keyed_account(
+        _keyed_account: &KeyedAccount,
+        _amm_context: &AmmContext,
+    ) -> Result<Self> {
         Ok(ReflectAmm::new())
     }
 
@@ -319,19 +322,19 @@ impl Amm for ReflectAmm {
     fn program_id(&self) -> Pubkey {
         self.program_id
     }
-    
+
     /// Returns the controller key for the current route
     fn key(&self) -> Pubkey {
         self.route
             .map(|r| r.controller())
-            .unwrap_or(usdc_controller::ID) // Default to USDC controller
+            .unwrap_or(reflect_exchange_rates::ids::usdc_controller::ID) // Default to USDC controller
     }
 
     /// Mints between which you can exchange (supports both USDC and USDT routes)
     fn get_reserve_mints(&self) -> Vec<Pubkey> {
         vec![
             usdc_mint::ID,
-            usdc_plus_mint::ID,
+            reflect_exchange_rates::ids::usdc_plus_mint::ID,
             usdt_mint::ID,
             reflect_exchange_rates::ids::usdt_plus_mint::ID,
         ]
@@ -344,20 +347,36 @@ impl Amm for ReflectAmm {
         if let Some(ref controller_data) = self.controller_data {
             let route = self.route.unwrap_or(ReflectRoute::Usdc);
             match route {
-                ReflectRoute::Usdc => {
-                    get_tvl_accounts_usdc(controller_data)
-                        .map_err(|e| anyhow!("Failed to get USDC TVL accounts: {:?}", e))
-                        .unwrap_or_else(|_| vec![usdc_controller::ID, usdc_plus_mint::ID])
-                }
-                ReflectRoute::Usdt => {
-                    get_tvl_accounts_usdt(controller_data)
-                        .map_err(|e| anyhow!("Failed to get USDT TVL accounts: {:?}", e))
-                        .unwrap_or_else(|_| vec![reflect_exchange_rates::ids::usdt_controller::ID, reflect_exchange_rates::ids::usdt_plus_mint::ID])
-                }
+                ReflectRoute::Usdc => get_tvl_accounts_usdc(controller_data)
+                    .map_err(|e| anyhow!("Failed to get USDC TVL accounts: {:?}", e))
+                    .unwrap_or_else(|_| {
+                        vec![
+                            reflect_exchange_rates::ids::usdc_controller::ID,
+                            reflect_exchange_rates::ids::usdc_plus_mint::ID,
+                        ]
+                    }),
+                ReflectRoute::Usdt => get_tvl_accounts_usdt(controller_data)
+                    .map_err(|e| anyhow!("Failed to get USDT TVL accounts: {:?}", e))
+                    .unwrap_or_else(|_| {
+                        vec![
+                            reflect_exchange_rates::ids::usdt_controller::ID,
+                            reflect_exchange_rates::ids::usdt_plus_mint::ID,
+                        ]
+                    }),
             }
         } else {
             // Fallback: return base accounts (controller + receipt mint)
-            vec![usdc_controller::ID, usdc_plus_mint::ID]
+            let route = self.route.unwrap_or(ReflectRoute::Usdc);
+            match route {
+                ReflectRoute::Usdc => vec![
+                    reflect_exchange_rates::ids::usdc_controller::ID,
+                    reflect_exchange_rates::ids::usdc_plus_mint::ID,
+                ],
+                ReflectRoute::Usdt => vec![
+                    reflect_exchange_rates::ids::usdt_controller::ID,
+                    reflect_exchange_rates::ids::usdt_plus_mint::ID,
+                ],
+            }
         }
     }
 
@@ -365,7 +384,7 @@ impl Amm for ReflectAmm {
         // Determine route if not set - try USDC first
         let route = self.route.unwrap_or_else(|| {
             // Try to determine from available accounts
-            if account_map.contains_key(&usdc_controller::ID) {
+            if account_map.contains_key(&reflect_exchange_rates::ids::usdc_controller::ID) {
                 ReflectRoute::Usdc
             } else if account_map.contains_key(&reflect_exchange_rates::ids::usdt_controller::ID) {
                 ReflectRoute::Usdt
@@ -390,6 +409,8 @@ impl Amm for ReflectAmm {
                 .map_err(|e| anyhow!("Failed to get USDT TVL accounts: {:?}", e))?,
         };
 
+        println!("tvl_accounts: {:?}", tvl_accounts);
+
         // Fetch protocol account data (skip first 2: controller and receipt_mint)
         let mut protocol_data = Vec::new();
         for account_key in tvl_accounts.iter().skip(2) {
@@ -398,27 +419,27 @@ impl Amm for ReflectAmm {
             }
         }
 
+        println!("Account map is of size: {:?}", account_map.len());
+
         // Convert protocol_data to slice references for exchange calculation
         let protocol_slices: Vec<&[u8]> = protocol_data.iter().map(|v| v.as_slice()).collect();
 
+        println!("protocol_slices size: {:?}", protocol_slices.len());
+
         // Calculate exchange components using reflect-exchange-rates
         let (deposited_vault, receipt_token_supply) = match route {
-            ReflectRoute::Usdc => {
-                get_exchange_components_usdc_data(
-                    &controller_data,
-                    &receipt_mint_data,
-                    &protocol_slices,
-                )
-                .map_err(|e| anyhow!("Failed to get USDC exchange components: {:?}", e))?
-            }
-            ReflectRoute::Usdt => {
-                get_exchange_components_usdt_data(
-                    &controller_data,
-                    &receipt_mint_data,
-                    &protocol_slices,
-                )
-                .map_err(|e| anyhow!("Failed to get USDT exchange components: {:?}", e))?
-            }
+            ReflectRoute::Usdc => get_exchange_components_usdc_data(
+                &controller_data,
+                &receipt_mint_data,
+                &protocol_slices,
+            )
+            .map_err(|e| anyhow!("Failed to get USDC exchange components: {:?}", e))?,
+            ReflectRoute::Usdt => get_exchange_components_usdt_data(
+                &controller_data,
+                &receipt_mint_data,
+                &protocol_slices,
+            )
+            .map_err(|e| anyhow!("Failed to get USDT exchange components: {:?}", e))?,
         };
 
         // Cache the data
@@ -436,12 +457,20 @@ impl Amm for ReflectAmm {
         let route = ReflectRoute::from_mints(&quote_params.input_mint, &quote_params.output_mint)?;
 
         // Ensure we have cached data
-        let controller_data = self.controller_data.as_ref()
+        let controller_data = self
+            .controller_data
+            .as_ref()
             .ok_or_else(|| anyhow!("Controller data not loaded. Call update() first."))?;
-        let receipt_mint_data = self.receipt_mint_data.as_ref()
+        let receipt_mint_data = self
+            .receipt_mint_data
+            .as_ref()
             .ok_or_else(|| anyhow!("Receipt mint data not loaded. Call update() first."))?;
-        
-        let protocol_slices: Vec<&[u8]> = self.protocol_account_data.iter().map(|v| v.as_slice()).collect();
+
+        let protocol_slices: Vec<&[u8]> = self
+            .protocol_account_data
+            .iter()
+            .map(|v| v.as_slice())
+            .collect();
 
         let (in_amount, out_amount) = match quote_params.swap_mode {
             SwapMode::ExactIn => {
@@ -559,27 +588,25 @@ impl Amm for ReflectAmm {
         let route = ReflectRoute::from_mints(source_mint, destination_mint)?;
 
         // Ensure we have controller data
-        let controller_data = self.controller_data.as_ref()
+        let controller_data = self
+            .controller_data
+            .as_ref()
             .ok_or_else(|| anyhow!("Controller data not loaded. Call update() first."))?;
 
         // Get supply change accounts using reflect-exchange-rates
         let account_pubkeys = match route {
-            ReflectRoute::Usdc => {
-                get_supply_change_accounts_usdc(
-                    token_transfer_authority,
-                    controller_data,
-                    Some(self.admin_permissions),
-                )
-                .map_err(|e| anyhow!("Failed to get USDC supply change accounts: {:?}", e))?
-            }
-            ReflectRoute::Usdt => {
-                get_supply_change_accounts_usdt(
-                    token_transfer_authority,
-                    controller_data,
-                    Some(self.admin_permissions),
-                )
-                .map_err(|e| anyhow!("Failed to get USDT supply change accounts: {:?}", e))?
-            }
+            ReflectRoute::Usdc => get_supply_change_accounts_usdc(
+                token_transfer_authority,
+                controller_data,
+                Some(self.admin_permissions),
+            )
+            .map_err(|e| anyhow!("Failed to get USDC supply change accounts: {:?}", e))?,
+            ReflectRoute::Usdt => get_supply_change_accounts_usdt(
+                token_transfer_authority,
+                controller_data,
+                Some(self.admin_permissions),
+            )
+            .map_err(|e| anyhow!("Failed to get USDT supply change accounts: {:?}", e))?,
         };
 
         // Determine which token accounts to use based on swap direction
@@ -589,13 +616,13 @@ impl Amm for ReflectAmm {
         };
 
         // The account order from get_supply_change_accounts is:
-        // [user, admin_permissions, main, controller, receipt_mint, user_receipt_ata, 
+        // [user, admin_permissions, main, controller, receipt_mint, user_receipt_ata,
         //  user_earn_ata, controller_earn_ata, token_program, associated_token_program,
         //  sysvar_instructions, system_program, ...protocol_accounts]
-        
+
         // We need to replace user_receipt_ata and user_earn_ata with the actual accounts from swap_params
         let mut account_metas = Vec::new();
-        
+
         for (idx, pubkey) in account_pubkeys.iter().enumerate() {
             let is_signer = idx == 0; // user is signer
             let is_writable = match idx {
@@ -674,7 +701,6 @@ impl Amm for ReflectAmm {
         }
     }
 }
-
 
 impl Clone for Box<dyn Amm + Send + Sync> {
     fn clone(&self) -> Box<dyn Amm + Send + Sync> {
@@ -831,8 +857,6 @@ impl From<Clock> for ClockRef {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,7 +866,8 @@ mod tests {
     const RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
     fn create_account_map(rpc: &RpcClient, pubkeys: &[Pubkey]) -> AccountMap {
-        let accounts = rpc.get_multiple_accounts(pubkeys)
+        let accounts = rpc
+            .get_multiple_accounts(pubkeys)
             .expect("Failed to fetch accounts from RPC");
         let mut map = AccountMap::default();
         for (i, account) in accounts.into_iter().enumerate() {
@@ -853,349 +878,725 @@ mod tests {
         map
     }
 
+    // ==================== USDC+ Tests ====================
+
     #[test]
-    fn test_reflect_amm_accounts_to_update() {
+    fn test_usdc_accounts_to_update() {
         let mut amm = ReflectAmm::new();
-        // Set route to USDC for testing
-        amm.set_route_from_mints(&usdc_mint::ID, &usdc_plus_mint::ID).unwrap();
-        
-        // Without controller data, should return fallback accounts
+        amm.set_route_from_mints(
+            &usdc_mint::ID,
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        )
+        .unwrap();
+
         let accounts = amm.get_accounts_to_update();
         assert!(accounts.len() >= 2);
-        assert!(accounts.contains(&usdc_controller::ID));
-        assert!(accounts.contains(&usdc_plus_mint::ID));
+        assert!(accounts.contains(&reflect_exchange_rates::ids::usdc_controller::ID));
+        assert!(accounts.contains(&reflect_exchange_rates::ids::usdc_plus_mint::ID));
     }
 
-    /// Integration test: Requires deployed accounts on mainnet
-    /// This test will fail until accounts are deployed
     #[test]
-    #[ignore = "Requires deployed accounts on mainnet"]
-    fn test_reflect_amm_update_and_quote() {
+    fn test_usdc_update_and_quote() {
         let rpc = RpcClient::new(RPC_URL);
         let mut amm = ReflectAmm::new();
-        
-        // Set route to USDC
-        amm.set_route_from_mints(&usdc_mint::ID, &usdc_plus_mint::ID).unwrap();
-        
-        // Fetch accounts needed for the update (start with base accounts)
-        let base_accounts = vec![usdc_controller::ID, usdc_plus_mint::ID];
+
+        amm.set_route_from_mints(
+            &usdc_mint::ID,
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdc_controller::ID,
+            reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        ];
         let mut account_map = create_account_map(&rpc, &base_accounts);
-        
-        // Get controller account - this will fail if not deployed
-        let controller_account = account_map.get(&usdc_controller::ID)
-            .expect("USDC controller account not found - account may not be deployed");
-        
-        // Get TVL accounts using controller data
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdc_controller::ID)
+            .expect("USDC controller account not found");
         let controller_data = controller_account.data.as_slice();
         let tvl_accounts = get_tvl_accounts_usdc(controller_data)
             .expect("Failed to get TVL accounts from controller data");
-        
-        // Fetch all protocol accounts
+
         let tvl_map = create_account_map(&rpc, &tvl_accounts);
         account_map.extend(tvl_map);
-        
-        // Update AMM state
-        amm.update(&account_map)
-            .expect("Failed to update AMM - check account data format");
-        
-        // Verify variables were set
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
         assert!(amm.protocol_tvl > 0, "Protocol TVL should be set");
         assert!(amm.effective_supply > 0, "Effective supply should be set");
     }
 
-    /// Integration test: Requires deployed accounts on mainnet
-    /// Tests USDC -> USDC+ quote calculation
     #[test]
-    #[ignore = "Requires deployed accounts on mainnet"]
-    fn test_reflect_amm_quote_usdc_to_usdc_plus() {
+    fn test_usdc_quote_deposit() {
         let rpc = RpcClient::new(RPC_URL);
         let mut amm = ReflectAmm::new();
-        
-        amm.set_route_from_mints(&usdc_mint::ID, &usdc_plus_mint::ID).unwrap();
-        
-        // Fetch base accounts
-        let base_accounts = vec![usdc_controller::ID, usdc_plus_mint::ID];
+
+        amm.set_route_from_mints(
+            &usdc_mint::ID,
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdc_controller::ID,
+            reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        ];
         let mut account_map = create_account_map(&rpc, &base_accounts);
-        
-        // Get TVL accounts
-        let controller_account = account_map.get(&usdc_controller::ID)
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdc_controller::ID)
             .expect("USDC controller account not found");
         let controller_data = controller_account.data.as_slice();
-        let tvl_accounts = get_tvl_accounts_usdc(controller_data)
-            .expect("Failed to get TVL accounts");
-        
+        let tvl_accounts =
+            get_tvl_accounts_usdc(controller_data).expect("Failed to get TVL accounts");
+
         let tvl_map = create_account_map(&rpc, &tvl_accounts);
         account_map.extend(tvl_map);
-        
-        amm.update(&account_map)
-            .expect("Failed to update AMM");
-        
-        // Quote for 100 USDC (6 decimals)
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
         let in_amount: u64 = 100_000_000;
-        let quote = amm.quote(&QuoteParams {
-            amount: in_amount,
-            input_mint: usdc_mint::ID,
-            output_mint: usdc_plus_mint::ID,
-            swap_mode: SwapMode::ExactIn,
-        }).expect("Failed to get quote");
-        
+        let quote = amm
+            .quote(&QuoteParams {
+                amount: in_amount,
+                input_mint: usdc_mint::ID,
+                output_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get quote");
+
         println!(
             "Quote: {} USDC -> {} USDC+",
             in_amount as f64 / 1_000_000.0,
             quote.out_amount as f64 / 1_000_000.0
         );
-        
+
         assert!(quote.out_amount > 0, "Output amount should be > 0");
+        assert!(
+            quote.out_amount <= in_amount,
+            "Deposit should not give more receipt tokens than input: {} USDC+ for {} USDC",
+            quote.out_amount,
+            in_amount
+        );
         assert_eq!(quote.in_amount, in_amount);
         assert_eq!(quote.fee_amount, 0);
     }
 
-    /// Integration test: Requires deployed accounts on mainnet
-    /// Tests USDC+ -> USDC quote calculation
     #[test]
-    #[ignore = "Requires deployed accounts on mainnet"]
-    fn test_reflect_amm_quote_usdc_plus_to_usdc() {
+    fn test_usdc_quote_redeem() {
         let rpc = RpcClient::new(RPC_URL);
         let mut amm = ReflectAmm::new();
-        
-        amm.set_route_from_mints(&usdc_plus_mint::ID, &usdc_mint::ID).unwrap();
-        
-        // Fetch base accounts
-        let base_accounts = vec![usdc_controller::ID, usdc_plus_mint::ID];
+
+        amm.set_route_from_mints(
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+            &usdc_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdc_controller::ID,
+            reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        ];
         let mut account_map = create_account_map(&rpc, &base_accounts);
-        
-        // Get TVL accounts
-        let controller_account = account_map.get(&usdc_controller::ID)
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdc_controller::ID)
             .expect("USDC controller account not found");
         let controller_data = controller_account.data.as_slice();
-        let tvl_accounts = get_tvl_accounts_usdc(controller_data)
-            .expect("Failed to get TVL accounts");
-        
+        let tvl_accounts =
+            get_tvl_accounts_usdc(controller_data).expect("Failed to get TVL accounts");
+
         let tvl_map = create_account_map(&rpc, &tvl_accounts);
         account_map.extend(tvl_map);
-        
-        amm.update(&account_map)
-            .expect("Failed to update AMM");
-        
-        // Quote for 100 USDC+ (6 decimals)
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
         let in_amount: u64 = 100_000_000;
-        let quote = amm.quote(&QuoteParams {
-            amount: in_amount,
-            input_mint: usdc_plus_mint::ID,
-            output_mint: usdc_mint::ID,
-            swap_mode: SwapMode::ExactIn,
-        }).expect("Failed to get quote");
-        
+        let quote = amm
+            .quote(&QuoteParams {
+                amount: in_amount,
+                input_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
+                output_mint: usdc_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get quote");
+
         println!(
             "Quote: {} USDC+ -> {} USDC",
             in_amount as f64 / 1_000_000.0,
             quote.out_amount as f64 / 1_000_000.0
         );
-        
+
         assert!(quote.out_amount > 0, "Output amount should be > 0");
+        assert!(
+            quote.out_amount >= in_amount,
+            "Redemption should give at least as many base tokens as receipt input: {} USDC for {} USDC+",
+            quote.out_amount,
+            in_amount
+        );
         assert_eq!(quote.in_amount, in_amount);
         assert_eq!(quote.fee_amount, 0);
     }
 
-    /// Integration test: Requires deployed accounts on mainnet
-    /// Tests roundtrip conversion accuracy
     #[test]
-    #[ignore = "Requires deployed accounts on mainnet"]
-    fn test_reflect_amm_quote_roundtrip() {
+    fn test_usdc_quote_roundtrip() {
         let rpc = RpcClient::new(RPC_URL);
         let mut amm = ReflectAmm::new();
-        
-        amm.set_route_from_mints(&usdc_mint::ID, &usdc_plus_mint::ID).unwrap();
-        
-        // Fetch base accounts
-        let base_accounts = vec![usdc_controller::ID, usdc_plus_mint::ID];
+
+        amm.set_route_from_mints(
+            &usdc_mint::ID,
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdc_controller::ID,
+            reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        ];
         let mut account_map = create_account_map(&rpc, &base_accounts);
-        
-        // Get TVL accounts
-        let controller_account = account_map.get(&usdc_controller::ID)
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdc_controller::ID)
             .expect("USDC controller account not found");
         let controller_data = controller_account.data.as_slice();
-        let tvl_accounts = get_tvl_accounts_usdc(controller_data)
-            .expect("Failed to get TVL accounts");
-        
+        let tvl_accounts =
+            get_tvl_accounts_usdc(controller_data).expect("Failed to get TVL accounts");
+
         let tvl_map = create_account_map(&rpc, &tvl_accounts);
         account_map.extend(tvl_map);
-        
-        amm.update(&account_map)
-            .expect("Failed to update AMM");
-        
-        // Start with 1000 USDC
-        let initial_usdc: u64 = 1_000_000_000;
-        
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
+        let initial_amount: u64 = 1_000_000_000;
+
         // USDC -> USDC+
-        let quote1 = amm.quote(&QuoteParams {
-            amount: initial_usdc,
-            input_mint: usdc_mint::ID,
-            output_mint: usdc_plus_mint::ID,
-            swap_mode: SwapMode::ExactIn,
-        }).expect("Failed to get deposit quote");
-        
+        let quote1 = amm
+            .quote(&QuoteParams {
+                amount: initial_amount,
+                input_mint: usdc_mint::ID,
+                output_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get deposit quote");
+
+        assert!(
+            quote1.out_amount <= initial_amount,
+            "Deposit should not give more receipt tokens than input"
+        );
+
         // USDC+ -> USDC
-        let quote2 = amm.quote(&QuoteParams {
-            amount: quote1.out_amount,
-            input_mint: usdc_plus_mint::ID,
-            output_mint: usdc_mint::ID,
-            swap_mode: SwapMode::ExactIn,
-        }).expect("Failed to get redemption quote");
-        
+        let quote2 = amm
+            .quote(&QuoteParams {
+                amount: quote1.out_amount,
+                input_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
+                output_mint: usdc_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get redemption quote");
+
         println!(
             "Roundtrip: {} USDC -> {} USDC+ -> {} USDC",
-            initial_usdc as f64 / 1_000_000.0,
+            initial_amount as f64 / 1_000_000.0,
             quote1.out_amount as f64 / 1_000_000.0,
             quote2.out_amount as f64 / 1_000_000.0
         );
-        
-        // Should get back approximately the same amount (within tolerance due to rounding/yield)
-        let diff = (initial_usdc as i64 - quote2.out_amount as i64).abs();
-        let tolerance = initial_usdc / 10000; // 0.01% tolerance
+
+        let diff = (initial_amount as i64 - quote2.out_amount as i64).abs();
+        let tolerance = initial_amount / 10000; // 0.01% tolerance
         assert!(
             diff <= tolerance as i64,
             "Roundtrip should be approximately equal: {} vs {} (diff: {})",
-            initial_usdc,
+            initial_amount,
             quote2.out_amount,
             diff
         );
     }
 
-    /// Integration test: Requires deployed accounts on mainnet
-    /// Tests swap account generation for deposit
     #[test]
-    #[ignore = "Requires deployed accounts on mainnet"]
-    fn test_reflect_amm_swap_and_account_metas_deposit() {
+    fn test_usdc_swap_metas_deposit() {
         let rpc = RpcClient::new(RPC_URL);
         let mut amm = ReflectAmm::new();
-        
-        // Fetch controller account
-        let controller_account = rpc.get_account(&usdc_controller::ID)
-            .expect("USDC controller account not found - account may not be deployed");
-        
+
+        let controller_account = rpc
+            .get_account(&reflect_exchange_rates::ids::usdc_controller::ID)
+            .expect("USDC controller account not found");
+
         let controller_data = controller_account.data;
-        
-        // Verify controller data can be deserialized
-        get_tvl_accounts_usdc(&controller_data)
-            .expect("Failed to deserialize controller data");
-        
+        get_tvl_accounts_usdc(&controller_data).expect("Failed to deserialize controller data");
+
         amm.controller_data = Some(controller_data);
-        amm.set_route_from_mints(&usdc_mint::ID, &usdc_plus_mint::ID)
-            .expect("Failed to set route");
-        
+        amm.set_route_from_mints(
+            &usdc_mint::ID,
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        )
+        .expect("Failed to set route");
+
         let user = Pubkey::new_unique();
-        let user_usdc_ata = Pubkey::new_unique();
-        let user_usdc_plus_ata = Pubkey::new_unique();
+        let user_base_ata = Pubkey::new_unique();
+        let user_receipt_ata = Pubkey::new_unique();
         let jupiter_program = Pubkey::new_unique();
-        
+
         let swap_params = SwapParams {
             swap_mode: SwapMode::ExactIn,
             in_amount: 100_000_000,
             out_amount: 99_000_000,
             source_mint: usdc_mint::ID,
-            destination_mint: usdc_plus_mint::ID,
-            source_token_account: user_usdc_ata,
-            destination_token_account: user_usdc_plus_ata,
+            destination_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
+            source_token_account: user_base_ata,
+            destination_token_account: user_receipt_ata,
             token_transfer_authority: user,
             quote_mint_to_referrer: None,
             jupiter_program_id: &jupiter_program,
             missing_dynamic_accounts_as_default: false,
         };
-        
-        let result = amm.get_swap_and_account_metas(&swap_params)
+
+        let result = amm
+            .get_swap_and_account_metas(&swap_params)
             .expect("Failed to get swap account metas");
-        
-        assert!(!result.account_metas.is_empty(), "Account metas should not be empty");
-        // First account should be the user (signer)
+
+        assert!(
+            !result.account_metas.is_empty(),
+            "Account metas should not be empty"
+        );
         assert_eq!(result.account_metas[0].pubkey, user);
         assert!(result.account_metas[0].is_signer, "User should be signer");
-        
-        // Verify account order matches expected structure
-        assert!(result.account_metas.len() >= 12, "Should have at least 12 base accounts");
+        assert!(
+            result.account_metas.len() >= 12,
+            "Should have at least 12 base accounts"
+        );
     }
 
-    /// Integration test: Requires deployed accounts on mainnet
-    /// Tests swap account generation for withdrawal
     #[test]
-    #[ignore = "Requires deployed accounts on mainnet"]
-    fn test_reflect_amm_swap_and_account_metas_withdraw() {
+    fn test_usdc_swap_metas_withdraw() {
         let rpc = RpcClient::new(RPC_URL);
         let mut amm = ReflectAmm::new();
-        
-        // Fetch controller account
-        let controller_account = rpc.get_account(&usdc_controller::ID)
-            .expect("USDC controller account not found - account may not be deployed");
-        
+
+        let controller_account = rpc
+            .get_account(&reflect_exchange_rates::ids::usdc_controller::ID)
+            .expect("USDC controller account not found");
+
         let controller_data = controller_account.data;
-        
-        // Verify controller data can be deserialized
-        get_tvl_accounts_usdc(&controller_data)
-            .expect("Failed to deserialize controller data");
-        
+        get_tvl_accounts_usdc(&controller_data).expect("Failed to deserialize controller data");
+
         amm.controller_data = Some(controller_data);
-        amm.set_route_from_mints(&usdc_plus_mint::ID, &usdc_mint::ID)
-            .expect("Failed to set route");
-        
+        amm.set_route_from_mints(
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+            &usdc_mint::ID,
+        )
+        .expect("Failed to set route");
+
         let user = Pubkey::new_unique();
-        let user_usdc_ata = Pubkey::new_unique();
-        let user_usdc_plus_ata = Pubkey::new_unique();
+        let user_base_ata = Pubkey::new_unique();
+        let user_receipt_ata = Pubkey::new_unique();
         let jupiter_program = Pubkey::new_unique();
-        
+
         let swap_params = SwapParams {
             swap_mode: SwapMode::ExactIn,
             in_amount: 100_000_000,
             out_amount: 101_000_000,
-            source_mint: usdc_plus_mint::ID,
+            source_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
             destination_mint: usdc_mint::ID,
-            source_token_account: user_usdc_plus_ata,
-            destination_token_account: user_usdc_ata,
+            source_token_account: user_receipt_ata,
+            destination_token_account: user_base_ata,
             token_transfer_authority: user,
             quote_mint_to_referrer: None,
             jupiter_program_id: &jupiter_program,
             missing_dynamic_accounts_as_default: false,
         };
-        
-        let result = amm.get_swap_and_account_metas(&swap_params)
+
+        let result = amm
+            .get_swap_and_account_metas(&swap_params)
             .expect("Failed to get swap account metas");
-        
-        assert!(!result.account_metas.is_empty(), "Account metas should not be empty");
+
+        assert!(
+            !result.account_metas.is_empty(),
+            "Account metas should not be empty"
+        );
         assert_eq!(result.account_metas[0].pubkey, user);
         assert!(result.account_metas[0].is_signer, "User should be signer");
-        
-        // Verify account order matches expected structure
-        assert!(result.account_metas.len() >= 12, "Should have at least 12 base accounts");
+        assert!(
+            result.account_metas.len() >= 12,
+            "Should have at least 12 base accounts"
+        );
     }
+
+    // ==================== USDT+ Tests ====================
+
+    #[test]
+    fn test_usdt_accounts_to_update() {
+        let mut amm = ReflectAmm::new();
+        amm.set_route_from_mints(
+            &usdt_mint::ID,
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        )
+        .unwrap();
+
+        let accounts = amm.get_accounts_to_update();
+        assert!(accounts.len() >= 2);
+        assert!(accounts.contains(&reflect_exchange_rates::ids::usdt_controller::ID));
+        assert!(accounts.contains(&reflect_exchange_rates::ids::usdt_plus_mint::ID));
+    }
+
+    #[test]
+    fn test_usdt_update_and_quote() {
+        let rpc = RpcClient::new(RPC_URL);
+        let mut amm = ReflectAmm::new();
+
+        amm.set_route_from_mints(
+            &usdt_mint::ID,
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdt_controller::ID,
+            reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        ];
+        let mut account_map = create_account_map(&rpc, &base_accounts);
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdt_controller::ID)
+            .expect("USDT controller account not found");
+        let controller_data = controller_account.data.as_slice();
+        let tvl_accounts = get_tvl_accounts_usdt(controller_data)
+            .expect("Failed to get TVL accounts from controller data");
+
+        let tvl_map = create_account_map(&rpc, &tvl_accounts);
+        account_map.extend(tvl_map);
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
+        assert!(amm.protocol_tvl > 0, "Protocol TVL should be set");
+        assert!(amm.effective_supply > 0, "Effective supply should be set");
+    }
+
+    #[test]
+    fn test_usdt_quote_deposit() {
+        let rpc = RpcClient::new(RPC_URL);
+        let mut amm = ReflectAmm::new();
+
+        amm.set_route_from_mints(
+            &usdt_mint::ID,
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdt_controller::ID,
+            reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        ];
+        let mut account_map = create_account_map(&rpc, &base_accounts);
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdt_controller::ID)
+            .expect("USDT controller account not found");
+        let controller_data = controller_account.data.as_slice();
+        let tvl_accounts =
+            get_tvl_accounts_usdt(controller_data).expect("Failed to get TVL accounts");
+
+        let tvl_map = create_account_map(&rpc, &tvl_accounts);
+        account_map.extend(tvl_map);
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
+        let in_amount: u64 = 100_000_000;
+        let quote = amm
+            .quote(&QuoteParams {
+                amount: in_amount,
+                input_mint: usdt_mint::ID,
+                output_mint: reflect_exchange_rates::ids::usdt_plus_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get quote");
+
+        println!(
+            "Quote: {} USDT -> {} USDT+",
+            in_amount as f64 / 1_000_000.0,
+            quote.out_amount as f64 / 1_000_000.0
+        );
+
+        assert!(quote.out_amount > 0, "Output amount should be > 0");
+        assert!(
+            quote.out_amount <= in_amount,
+            "Deposit should not give more receipt tokens than input: {} USDT+ for {} USDT",
+            quote.out_amount,
+            in_amount
+        );
+        assert_eq!(quote.in_amount, in_amount);
+        assert_eq!(quote.fee_amount, 0);
+    }
+
+    #[test]
+    fn test_usdt_quote_redeem() {
+        let rpc = RpcClient::new(RPC_URL);
+        let mut amm = ReflectAmm::new();
+
+        amm.set_route_from_mints(
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+            &usdt_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdt_controller::ID,
+            reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        ];
+        let mut account_map = create_account_map(&rpc, &base_accounts);
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdt_controller::ID)
+            .expect("USDT controller account not found");
+        let controller_data = controller_account.data.as_slice();
+        let tvl_accounts =
+            get_tvl_accounts_usdt(controller_data).expect("Failed to get TVL accounts");
+
+        let tvl_map = create_account_map(&rpc, &tvl_accounts);
+        account_map.extend(tvl_map);
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
+        let in_amount: u64 = 100_000_000;
+        let quote = amm
+            .quote(&QuoteParams {
+                amount: in_amount,
+                input_mint: reflect_exchange_rates::ids::usdt_plus_mint::ID,
+                output_mint: usdt_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get quote");
+
+        println!(
+            "Quote: {} USDT+ -> {} USDT",
+            in_amount as f64 / 1_000_000.0,
+            quote.out_amount as f64 / 1_000_000.0
+        );
+
+        assert!(quote.out_amount > 0, "Output amount should be > 0");
+        assert!(
+            quote.out_amount >= in_amount,
+            "Redemption should give at least as many base tokens as receipt input: {} USDT for {} USDT+",
+            quote.out_amount,
+            in_amount
+        );
+        assert_eq!(quote.in_amount, in_amount);
+        assert_eq!(quote.fee_amount, 0);
+    }
+
+    #[test]
+    fn test_usdt_quote_roundtrip() {
+        let rpc = RpcClient::new(RPC_URL);
+        let mut amm = ReflectAmm::new();
+
+        amm.set_route_from_mints(
+            &usdt_mint::ID,
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        )
+        .unwrap();
+
+        let base_accounts = vec![
+            reflect_exchange_rates::ids::usdt_controller::ID,
+            reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        ];
+        let mut account_map = create_account_map(&rpc, &base_accounts);
+
+        let controller_account = account_map
+            .get(&reflect_exchange_rates::ids::usdt_controller::ID)
+            .expect("USDT controller account not found");
+        let controller_data = controller_account.data.as_slice();
+        let tvl_accounts =
+            get_tvl_accounts_usdt(controller_data).expect("Failed to get TVL accounts");
+
+        let tvl_map = create_account_map(&rpc, &tvl_accounts);
+        account_map.extend(tvl_map);
+
+        amm.update(&account_map).expect("Failed to update AMM");
+
+        let initial_amount: u64 = 1_000_000_000;
+
+        // USDT -> USDT+
+        let quote1 = amm
+            .quote(&QuoteParams {
+                amount: initial_amount,
+                input_mint: usdt_mint::ID,
+                output_mint: reflect_exchange_rates::ids::usdt_plus_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get deposit quote");
+
+        assert!(
+            quote1.out_amount <= initial_amount,
+            "Deposit should not give more receipt tokens than input"
+        );
+
+        // USDT+ -> USDT
+        let quote2 = amm
+            .quote(&QuoteParams {
+                amount: quote1.out_amount,
+                input_mint: reflect_exchange_rates::ids::usdt_plus_mint::ID,
+                output_mint: usdt_mint::ID,
+                swap_mode: SwapMode::ExactIn,
+            })
+            .expect("Failed to get redemption quote");
+
+        println!(
+            "Roundtrip: {} USDT -> {} USDT+ -> {} USDT",
+            initial_amount as f64 / 1_000_000.0,
+            quote1.out_amount as f64 / 1_000_000.0,
+            quote2.out_amount as f64 / 1_000_000.0
+        );
+
+        let diff = (initial_amount as i64 - quote2.out_amount as i64).abs();
+        let tolerance = initial_amount / 10000; // 0.01% tolerance
+        assert!(
+            diff <= tolerance as i64,
+            "Roundtrip should be approximately equal: {} vs {} (diff: {})",
+            initial_amount,
+            quote2.out_amount,
+            diff
+        );
+    }
+
+    #[test]
+    fn test_usdt_swap_metas_deposit() {
+        let rpc = RpcClient::new(RPC_URL);
+        let mut amm = ReflectAmm::new();
+
+        let controller_account = rpc
+            .get_account(&reflect_exchange_rates::ids::usdt_controller::ID)
+            .expect("USDT controller account not found");
+
+        let controller_data = controller_account.data;
+        get_tvl_accounts_usdt(&controller_data).expect("Failed to deserialize controller data");
+
+        amm.controller_data = Some(controller_data);
+        amm.set_route_from_mints(
+            &usdt_mint::ID,
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        )
+        .expect("Failed to set route");
+
+        let user = Pubkey::new_unique();
+        let user_base_ata = Pubkey::new_unique();
+        let user_receipt_ata = Pubkey::new_unique();
+        let jupiter_program = Pubkey::new_unique();
+
+        let swap_params = SwapParams {
+            swap_mode: SwapMode::ExactIn,
+            in_amount: 100_000_000,
+            out_amount: 99_000_000,
+            source_mint: usdt_mint::ID,
+            destination_mint: reflect_exchange_rates::ids::usdt_plus_mint::ID,
+            source_token_account: user_base_ata,
+            destination_token_account: user_receipt_ata,
+            token_transfer_authority: user,
+            quote_mint_to_referrer: None,
+            jupiter_program_id: &jupiter_program,
+            missing_dynamic_accounts_as_default: false,
+        };
+
+        let result = amm
+            .get_swap_and_account_metas(&swap_params)
+            .expect("Failed to get swap account metas");
+
+        assert!(
+            !result.account_metas.is_empty(),
+            "Account metas should not be empty"
+        );
+        assert_eq!(result.account_metas[0].pubkey, user);
+        assert!(result.account_metas[0].is_signer, "User should be signer");
+        assert!(
+            result.account_metas.len() >= 12,
+            "Should have at least 12 base accounts"
+        );
+    }
+
+    #[test]
+    fn test_usdt_swap_metas_withdraw() {
+        let rpc = RpcClient::new(RPC_URL);
+        let mut amm = ReflectAmm::new();
+
+        let controller_account = rpc
+            .get_account(&reflect_exchange_rates::ids::usdt_controller::ID)
+            .expect("USDT controller account not found");
+
+        let controller_data = controller_account.data;
+        get_tvl_accounts_usdt(&controller_data).expect("Failed to deserialize controller data");
+
+        amm.controller_data = Some(controller_data);
+        amm.set_route_from_mints(
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+            &usdt_mint::ID,
+        )
+        .expect("Failed to set route");
+
+        let user = Pubkey::new_unique();
+        let user_base_ata = Pubkey::new_unique();
+        let user_receipt_ata = Pubkey::new_unique();
+        let jupiter_program = Pubkey::new_unique();
+
+        let swap_params = SwapParams {
+            swap_mode: SwapMode::ExactIn,
+            in_amount: 100_000_000,
+            out_amount: 101_000_000,
+            source_mint: reflect_exchange_rates::ids::usdt_plus_mint::ID,
+            destination_mint: usdt_mint::ID,
+            source_token_account: user_receipt_ata,
+            destination_token_account: user_base_ata,
+            token_transfer_authority: user,
+            quote_mint_to_referrer: None,
+            jupiter_program_id: &jupiter_program,
+            missing_dynamic_accounts_as_default: false,
+        };
+
+        let result = amm
+            .get_swap_and_account_metas(&swap_params)
+            .expect("Failed to get swap account metas");
+
+        assert!(
+            !result.account_metas.is_empty(),
+            "Account metas should not be empty"
+        );
+        assert_eq!(result.account_metas[0].pubkey, user);
+        assert!(result.account_metas[0].is_signer, "User should be signer");
+        assert!(
+            result.account_metas.len() >= 12,
+            "Should have at least 12 base accounts"
+        );
+    }
+
+    // ==================== Generic Tests ====================
 
     #[test]
     fn test_reflect_amm_quote_invalid_mint() {
         let amm = ReflectAmm::new();
-        
+
         let invalid_mint = Pubkey::new_unique();
         let result = amm.quote(&QuoteParams {
             amount: 100_000_000,
             input_mint: invalid_mint,
-            output_mint: usdc_plus_mint::ID,
+            output_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
             swap_mode: SwapMode::ExactIn,
         });
-        
+
         assert!(result.is_err(), "Should fail with invalid input mint");
     }
 
     #[test]
     fn test_reflect_amm_swap_invalid_mint_pair() {
         let amm = ReflectAmm::new();
-        
+
         let user = Pubkey::new_unique();
         let invalid_mint = Pubkey::new_unique();
         let jupiter_program = Pubkey::new_unique();
-        
+
         let swap_params = SwapParams {
             swap_mode: SwapMode::ExactIn,
             in_amount: 100_000_000,
             out_amount: 99_000_000,
             source_mint: invalid_mint,
-            destination_mint: usdc_plus_mint::ID,
+            destination_mint: reflect_exchange_rates::ids::usdc_plus_mint::ID,
             source_token_account: Pubkey::new_unique(),
             destination_token_account: Pubkey::new_unique(),
             token_transfer_authority: user,
@@ -1203,7 +1604,7 @@ mod tests {
             jupiter_program_id: &jupiter_program,
             missing_dynamic_accounts_as_default: false,
         };
-        
+
         let result = amm.get_swap_and_account_metas(&swap_params);
         assert!(result.is_err(), "Should fail with invalid mint pair");
     }
@@ -1211,16 +1612,16 @@ mod tests {
     #[test]
     fn test_reflect_amm_swap_same_mint() {
         let amm = ReflectAmm::new();
-        
+
         let user = Pubkey::new_unique();
         let jupiter_program = Pubkey::new_unique();
-        
+
         let swap_params = SwapParams {
             swap_mode: SwapMode::ExactIn,
             in_amount: 100_000_000,
             out_amount: 100_000_000,
             source_mint: usdc_mint::ID,
-            destination_mint: usdc_mint::ID, // Same mint!
+            destination_mint: usdc_mint::ID,
             source_token_account: Pubkey::new_unique(),
             destination_token_account: Pubkey::new_unique(),
             token_transfer_authority: user,
@@ -1228,39 +1629,70 @@ mod tests {
             jupiter_program_id: &jupiter_program,
             missing_dynamic_accounts_as_default: false,
         };
-        
+
         let result = amm.get_swap_and_account_metas(&swap_params);
-        assert!(result.is_err(), "Should fail when source and destination mint are the same");
+        assert!(
+            result.is_err(),
+            "Should fail when source and destination mint are the same"
+        );
     }
 
     #[test]
     fn test_reflect_amm_clone() {
         let amm = ReflectAmm::new();
         let cloned = amm.clone_amm();
-        
+
         assert_eq!(cloned.label(), amm.label());
         assert_eq!(cloned.program_id(), amm.program_id());
         assert_eq!(cloned.key(), amm.key());
     }
 
     #[test]
-    fn test_reflect_amm_trait_methods() {
+    fn test_reflect_amm_trait_methods_usdc() {
         let mut amm = ReflectAmm::new();
-        amm.set_route_from_mints(&usdc_mint::ID, &usdc_plus_mint::ID).unwrap();
-        
+        amm.set_route_from_mints(
+            &usdc_mint::ID,
+            &reflect_exchange_rates::ids::usdc_plus_mint::ID,
+        )
+        .unwrap();
+
         assert_eq!(amm.label(), REFLECT_LABEL);
         assert_eq!(amm.program_id(), reflect::ID);
-        assert_eq!(amm.key(), usdc_controller::ID);
+        assert_eq!(amm.key(), reflect_exchange_rates::ids::usdc_controller::ID);
         assert!(!amm.has_dynamic_accounts());
         assert!(!amm.requires_update_for_reserve_mints());
         assert!(amm.supports_exact_out());
         assert!(!amm.unidirectional());
         assert!(amm.is_active());
-        
-        // Test reserve mints includes both USDC and USDT routes
+
         let reserve_mints = amm.get_reserve_mints();
         assert!(reserve_mints.contains(&usdc_mint::ID));
-        assert!(reserve_mints.contains(&usdc_plus_mint::ID));
+        assert!(reserve_mints.contains(&reflect_exchange_rates::ids::usdc_plus_mint::ID));
+        assert!(reserve_mints.contains(&usdt_mint::ID));
+        assert!(reserve_mints.contains(&reflect_exchange_rates::ids::usdt_plus_mint::ID));
+    }
+
+    #[test]
+    fn test_reflect_amm_trait_methods_usdt() {
+        let mut amm = ReflectAmm::new();
+        amm.set_route_from_mints(
+            &usdt_mint::ID,
+            &reflect_exchange_rates::ids::usdt_plus_mint::ID,
+        )
+        .unwrap();
+
+        assert_eq!(amm.label(), REFLECT_LABEL);
+        assert_eq!(amm.program_id(), reflect::ID);
+        assert_eq!(amm.key(), reflect_exchange_rates::ids::usdt_controller::ID);
+        assert!(!amm.has_dynamic_accounts());
+        assert!(!amm.requires_update_for_reserve_mints());
+        assert!(amm.supports_exact_out());
+        assert!(!amm.unidirectional());
+        assert!(amm.is_active());
+
+        let reserve_mints = amm.get_reserve_mints();
+        assert!(reserve_mints.contains(&usdc_mint::ID));
+        assert!(reserve_mints.contains(&reflect_exchange_rates::ids::usdc_plus_mint::ID));
         assert!(reserve_mints.contains(&usdt_mint::ID));
         assert!(reserve_mints.contains(&reflect_exchange_rates::ids::usdt_plus_mint::ID));
     }
