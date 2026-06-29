@@ -7,7 +7,7 @@ description = "Reflect lending strategy as a Titan TradingVenue, built on reflec
 [dependencies]
 reflect-sdk = { package = "reflect-core-sdk", path = "../../../reflect-core-sdk" }
 
-# ── upstream Titan integration-template deps (the vendored TradingVenue trait) ──
+# upstream Titan integration-template deps - the vendored TradingVenue trait
 async-trait = "0.1"
 thiserror = "1"
 log = "0.4"
@@ -18,3 +18,26 @@ solana-instruction = "2.2"
 spl-token = { version = "7", features = ["no-entrypoint"] }
 spl-token-2022 = { version = "^9", features = ["no-entrypoint"] }
 spl-associated-token-account = "6"
+
+# parity.rs proves quote==execution atom-exact. The controller is not on
+# mainnet, so the Reserve+Kamino cell is FORGED by reflect_main's ix sequence
+# (the program creates the Kamino obligation — it cannot be hand-synthesized)
+# over Mollusk in reflect-core and dumped to tests/fixtures. That forge pins
+# solana 2.1 (mollusk 0.0.13 + reflect_main `=2.1.0`) and CANNOT link with these
+# 2.2 adapters, so it runs there and the committed snapshot is consumed here.
+# LiteSVM 0.6.x is the 2.2-compatible release.
+[dev-dependencies]
+litesvm = "=0.6.1"
+solana-sdk = "2.2"
+solana-program-pack = "2.2"
+# ONLY dumps the cloned Kamino programs from RPC on demand (their .so's are 10MB
+# each — fetched + cached, never committed). reflect_main.so is the forged
+# program under test, committed alongside the fixture.
+solana-client = "2.2"
+spl-token = { version = "7", features = ["no-entrypoint"] }
+spl-associated-token-account = "6"
+serde_json = "1"
+base64 = "0.22"
+bincode = "1.3"
+tokio = { version = "1", features = ["rt", "macros"] }
+rand = "0.8"

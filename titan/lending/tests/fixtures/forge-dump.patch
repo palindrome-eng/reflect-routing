@@ -1,0 +1,263 @@
+diff --git a/programs/reflect-main/tests/lending/routing_tests.rs b/programs/reflect-main/tests/lending/routing_tests.rs
+index 1b4cc0ba..7b060fa1 100644
+--- a/programs/reflect-main/tests/lending/routing_tests.rs
++++ b/programs/reflect-main/tests/lending/routing_tests.rs
+@@ -19,6 +19,7 @@ mod tests {
+         account::{Account, AccountSharedData},
+         instruction::{AccountMeta, Instruction},
+         native_loader,
++        signature::Signer,
+     };
+ 
+     use super::testing_utils::*;
+@@ -74,7 +75,13 @@ mod tests {
+ 
+         let fixtures = TestFixtures::load();
+ 
+-        let admin = Pubkey::new_unique();
++        // A DETERMINISTIC admin keypair (not `new_unique`): the reflect-routing
++        // LiteSVM parity test signs `mint_lending`/`redeem_lending` as this
++        // privileged admin (the only caller `user_permission` grants the Mint/
++        // Redeem action), and LiteSVM cryptographically verifies the signature -
++        // so it needs the secret. Dumped in the snapshot meta when exporting.
++        let admin_kp = solana_sdk::signature::keypair_from_seed(&[7u8; 32]).unwrap();
++        let admin = admin_kp.pubkey();
+         let (main, _) = Pubkey::find_program_address(&[b"main"], &program_id);
+         let (creds, _) = Pubkey::find_program_address(&[b"user_permission", admin.as_ref()], &program_id);
+         let controller = Pubkey::find_program_address(&[b"dex_controller", &[STRATEGY_INDEX]], &program_id).0;
+@@ -90,7 +97,7 @@ mod tests {
+             ),
+         ];
+ 
+-        // ─── 1. init_main ─────────────────────────────────────────────────────
++        // 1. init_main
+         let ix_init_main = Instruction::new_with_bytes(
+             program_id,
+             &anchor_disc("init_main"),
+@@ -100,7 +107,7 @@ mod tests {
+         assert!(!result.program_result.is_err(), "init_main failed: {:?}", result.program_result);
+         accounts = result.resulting_accounts;
+ 
+-        // ─── 2. init_controller_lending (USDC) ────────────────────────────────
++        // 2. init_controller_lending (USDC)
+         let receipt_mint = Pubkey::new_unique();
+         let receipt_mint_data = spl_token::state::Mint { mint_authority: Some(controller).into(), supply: 0, decimals: 6, is_initialized: true, freeze_authority: None.into() };
+         let usdc_mint_data = spl_token::state::Mint {
+@@ -153,7 +160,7 @@ mod tests {
+         assert!(!result.program_result.is_err(), "init_controller_lending failed: {:?}", result.program_result);
+         accounts = result.resulting_accounts;
+ 
+-        // ─── 3. Clock + Kamino fixtures ──────────────────────────────────────
++        // 3. Clock + Kamino fixtures
+         // Pinned to the slot/timestamp of the cached scope_prices oracle (last
+         // refreshed via UPDATE_FIXTURES=1). Update both together if you refresh
+         // the oracle fixture, otherwise Kamino's 180s price-too-old check fires.
+@@ -227,7 +234,7 @@ mod tests {
+         accounts.push((obligation_farm_state, create_empty_account()));
+         accounts.push((kamino_lending_market_authority, kamino_store.get("kamino_auth").account.clone()));
+ 
+-        // ─── 4. User / controller token accounts ──────────────────────────────
++        // 4. User / controller token accounts
+         let user = admin;
+         let (user_usdc_ata, user_usdc_ata_data) = create_token_account_for_owner(&user, &usdc_mint, Some(100_000_000_000_000_000));
+         let (controller_usdc_ata, controller_usdc_ata_data) = create_token_account_for_owner(&controller, &usdc_mint, None);
+@@ -251,7 +258,7 @@ mod tests {
+         let drift_store = if run_live_test() { fixtures.resolve_with_overrides("drift", &[("usdc_pull_oracle", AccountSource::Live)]) } else { fixtures.resolve("drift") };
+         accounts.push((usdc_lazer_oracle, drift_store.get("usdc_pull_oracle").account.clone()));
+ 
+-        // ─── 5. create_kamino_user_accounts (obligation + metadata + farm state) ──
++        // 5. create_kamino_user_accounts (obligation + metadata + farm state)
+         let metas_create_kamino = vec![
+             AccountMeta::new(main, false),
+             AccountMeta::new(controller, false),
+@@ -284,7 +291,7 @@ mod tests {
+         assert!(!result.program_result.is_err(), "create_kamino_user_accounts failed: {:?}", result.program_result);
+         accounts = result.resulting_accounts;
+ 
+-        // ─── 6. Pool registry with Kamino @ index 0 ───────────────────────────
++        // 6. Pool registry with Kamino @ index 0
+         let (pool_registry_key, pool_registry_account) = create_pool_registry_account(
+             &program_id,
+             &[(
+@@ -307,7 +314,7 @@ mod tests {
+             accounts.push((pool_registry_key, pool_registry_account));
+         }
+ 
+-        // ─── 7. Add Kamino pool to conductor (slot 1; reserve sentinel @ slot 0) ──
++        // 7. Add Kamino pool to conductor (slot 1; reserve sentinel @ slot 0)
+         let metas_add_pool = vec![
+             AccountMeta::new(main, false),
+             AccountMeta::new(pool_registry_key, false),
+@@ -321,7 +328,7 @@ mod tests {
+         accounts = result.resulting_accounts;
+         println!("✓ Setup: USDC strategy + Kamino pool added (cc.filled = 2)");
+ 
+-        // ─── 8. Mark Kamino pool optional_for_user_routing ────────────────────
++        // 8. Mark Kamino pool optional_for_user_routing
+         // Without this flag, missing routing accounts hard-error; with it, the
+         // resolver silent-skips so the routing-table count drops naturally
+         // and the `min_provided_routes` check is what fires the rejection.
+@@ -337,7 +344,7 @@ mod tests {
+         accounts = result.resulting_accounts;
+         println!("✓ Kamino pool flagged optional_for_user_routing");
+ 
+-        // ─── 9. Mint context builders ─────────────────────────────────────────
++        // 9. Mint context builders
+         let mut mint_args = Vec::new();
+         let deposit_amount: u64 = 1_000_000_000;
+         mint_args.extend_from_slice(&deposit_amount.to_le_bytes());
+@@ -417,7 +424,7 @@ mod tests {
+             v
+         };
+ 
+-        // ─── 10. update_capital_conductor helper for setting min_provided_routes ──
++        // 10. update_capital_conductor helper for setting min_provided_routes
+         let metas_admin_strategy = vec![
+             AccountMeta::new(main, false),
+             AccountMeta::new(admin, true),
+@@ -431,9 +438,7 @@ mod tests {
+             Instruction::new_with_bytes(program_id, &ix_bytes("update_capital_conductor", &upd.try_to_vec().unwrap()), metas_admin_strategy.clone())
+         };
+ 
+-        // ════════════════════════════════════════════════════════════════════
+         // SCENARIO 0: sanity — full context with min=1 (default) succeeds.
+-        // ════════════════════════════════════════════════════════════════════
+         // Introspection policy registry account; required in remaining_accounts by enforce_policies.
+         accounts.push(create_policy_registry_account(&program_id));
+ 
+@@ -444,12 +449,86 @@ mod tests {
+         accounts = result.resulting_accounts;
+         println!("✓ scenario 0: mint with full context succeeds (min=1 default)");
+ 
+-        // ════════════════════════════════════════════════════════════════════
++        // One-shot forged-state export for the reflect-routing LiteSVM parity
++        // test, which CANNOT link this forge (mollusk/reflect_main pin solana
++        // 2.1, the adapters pin 2.2). Dumped right after a real `mint_lending` so
++        // the Kamino obligation holds a NON-trivial position (the exchange rate
++        // the parity sweep checks). Gated on DUMP_FORGE_SNAPSHOT=<path>; a no-op
++        // in normal CI runs. Shape mirrors the cached fixture JSON so the
++        // consumer reuses one loader.
++        if let Ok(path) = std::env::var("DUMP_FORGE_SNAPSHOT") {
++            use base64::{engine::general_purpose::STANDARD as B64, Engine};
++            use solana_sdk::account::ReadableAccount;
++            use solana_sdk::signature::Signer;
++
++            // Publish Mint + Redeem as PUBLIC actions on the strategy so the
++            // permissionless routing adapter ix (which passes no admin_permissions)
++            // is accepted - the production config for a routed strategy. Only in
++            // dump mode; the routing-gate scenarios below run untouched without it.
++            let mut publish = |action: Action, accs: &mut Vec<(Pubkey, AccountSharedData)>| {
++                let mut args = action.try_to_vec().unwrap();
++                args.extend(Role::PUBLIC.try_to_vec().unwrap());
++                args.extend(Update::Add.try_to_vec().unwrap());
++                let metas = vec![
++                    AccountMeta::new(main, false),
++                    AccountMeta::new(admin, true),
++                    AccountMeta::new_readonly(system_program::id(), false),
++                    AccountMeta::new(controller, false),
++                    AccountMeta::new(creds, false),
++                ];
++                let ix = Instruction::new_with_bytes(program_id, &ix_bytes("update_action_role_strategy", &args), metas);
++                let r = mollusk.process_instruction(&ix, accs);
++                assert!(!r.program_result.is_err(), "publish {action:?} PUBLIC failed: {:?}", r.program_result);
++                *accs = r.resulting_accounts;
++            };
++            publish(Action::Mint, &mut accounts);
++            publish(Action::Redeem, &mut accounts);
++
++            let recs: Vec<serde_json::Value> = accounts
++                .iter()
++                .map(|(k, a)| {
++                    serde_json::json!({
++                        "pubkey": k.to_string(),
++                        "account": {
++                            "lamports": a.lamports(),
++                            "data": [B64.encode(a.data()), "base64"],
++                            "owner": a.owner().to_string(),
++                            "executable": a.executable(),
++                            "rentEpoch": a.rent_epoch(),
++                        }
++                    })
++                })
++                .collect();
++            let out = serde_json::json!({
++                "program_id": program_id.to_string(),
++                "controller": controller.to_string(),
++                "admin": admin.to_string(),
++                "admin_secret": B64.encode(admin_kp.to_bytes()),
++                "slot": mollusk.sysvars.clock.slot,
++                "unix": mollusk.sysvars.clock.unix_timestamp,
++                "accounts": recs,
++            });
++            std::fs::write(&path, serde_json::to_vec_pretty(&out).unwrap()).unwrap();
++            println!("✓ dumped {} forged accounts → {path}", accounts.len());
++
++            // Keep the committed program in lockstep with the fixture it forged:
++            // copy reflect_main.so next to the JSON so a fresh reflect-routing
++            // clone can execute without this sibling checkout (the mock program
++            // id is not on mainnet, so it can't be RPC-dumped).
++            if let Some(dir) = std::path::Path::new(&path).parent() {
++                let progs = dir.join("programs");
++                let _ = std::fs::create_dir_all(&progs);
++                let _ = std::fs::copy("../../target/deploy/reflect_main.so", progs.join("reflect_main.so"));
++            }
++            // Dump mode publishes PUBLIC actions, which would perturb the
++            // routing-gate scenarios below; stop here.
++            return Ok(());
++        }
++
+         // SCENARIO 1: min=2 (reserve + Kamino).
+         //   - full context  → 2 routes ≥ 2 → mint succeeds.
+         //   - no-routing ctx → 1 route (reserve only) < 2 → reject with
+         //     RoutingBelowMinProvidedRoutes.
+-        // ════════════════════════════════════════════════════════════════════
+         let result = mollusk.process_instruction(&mk_ix_set_min(2), &accounts);
+         assert!(!result.program_result.is_err(), "set min_provided_routes=2 failed: {:?}", result.program_result);
+         accounts = result.resulting_accounts;
+@@ -475,10 +554,8 @@ mod tests {
+         );
+         println!("✓ scenario 1b: min=2 + no-routing context (reserve only = 1 route < 2): RoutingBelowMinProvidedRoutes");
+ 
+-        // ════════════════════════════════════════════════════════════════════
+         // SCENARIO 2: min=1 (reserve alone is enough).
+         //   - no-routing ctx → 1 route (reserve) ≥ 1 → mint succeeds.
+-        // ════════════════════════════════════════════════════════════════════
+         let result = mollusk.process_instruction(&mk_ix_set_min(1), &accounts);
+         assert!(!result.program_result.is_err(), "set min_provided_routes=1 failed: {:?}", result.program_result);
+         accounts = result.resulting_accounts;
+@@ -490,7 +567,6 @@ mod tests {
+         accounts = result.resulting_accounts;
+         println!("✓ scenario 2: min=1 + no-routing context (reserve alone = 1 route): mint succeeds");
+ 
+-        // ════════════════════════════════════════════════════════════════════
+         // SCENARIO 3: reserve is unconditionally part of the X count.
+         //   The reserve cannot be substituted by other routes — supplying
+         //   enough non-reserve routes to satisfy the threshold arithmetically
+@@ -503,10 +579,9 @@ mod tests {
+         //   `MissingAccount`, NOT a successful build with Kamino as the lone
+         //   route. Proves reserve is required regardless of how many other
+         //   routes the user supplies.
+-        // ════════════════════════════════════════════════════════════════════
+         let result = mollusk.process_instruction(&mk_ix_set_min(1), &accounts);
+         // min was already 1 from scenario 2 — set_min_provided_routes rejects
+-        // unchanged values; tolerate that "error" since min is already what we want.
++        // unchanged values; tolerate that "error" since min is already the target.
+         accounts = if result.program_result.is_err() { accounts } else { result.resulting_accounts };
+ 
+         let ix = Instruction::new_with_bytes(program_id, &ix_bytes("mint_lending", &mint_args), build_no_reserve_ctx());
+@@ -521,7 +596,6 @@ mod tests {
+         );
+         println!("✓ scenario 3: reserve missing → MissingAccount (reserve unconditionally in X, non-reserve routes cannot substitute)");
+ 
+-        // ════════════════════════════════════════════════════════════════════
+         // SCENARIO 4: admin-only pool excluded from the X count even when
+         //   the user supplies its full routing account set.
+         //
+@@ -529,7 +603,6 @@ mod tests {
+         //   `routing=None` for that slot regardless of supplied accounts. The
+         //   only resolved route is the reserve. With min=2, count = 1 < 2 →
+         //   `RoutingBelowMinProvidedRoutes`.
+-        // ════════════════════════════════════════════════════════════════════
+         // Toggle Kamino: clear PartOfUserRouting (flag variant=0, value=0).
+         let toggle_metas = vec![AccountMeta::new(main, false), AccountMeta::new(pool_registry_key, false), AccountMeta::new(admin, true), AccountMeta::new(creds, false)];
+         let ix_make_admin_only = Instruction::new_with_bytes(
