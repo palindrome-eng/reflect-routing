@@ -5,6 +5,7 @@ edition = "2021"
 description = "Reflect lending strategy as a Titan TradingVenue, built on reflect-sdk."
 
 [dependencies]
+reflect-routing-core = { path = "../../core" }
 reflect-sdk = { package = "reflect-core-sdk", path = "../../../reflect-core-sdk" }
 
 # upstream Titan integration-template deps - the vendored TradingVenue trait
