@@ -78,8 +78,10 @@ fn resolve_programs(test: &str) -> Option<Programs> {
         eprintln!("[skip {test}] no reflect_main.so (commit tests/fixtures/programs/reflect_main.so or build reflect-core)");
         None
     })?;
-    let klend = resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"))?;
-    let kfarms = resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"))?;
+    let klend =
+        resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"))?;
+    let kfarms =
+        resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"))?;
     Some(Programs { reflect, klend, kfarms })
 }
 
