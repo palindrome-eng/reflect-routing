@@ -1,6 +1,9 @@
-//! Reflect **lending** routing: the account plumbing + SDK delegation shared by
-//! the Jupiter and Titan shims. The SDK owns all protocol math; [`LendingVenue`]
-//! is account plumbing plus the mint→operation dispatch.
+//! Reflect **lending + bonds** routing: the account plumbing + SDK delegation
+//! shared by the Jupiter and Titan shims. The SDK owns all protocol math;
+//! [`LendingVenue`] / [`bonds::BondVenue`] are account plumbing plus the
+//! mint→operation dispatch.
+
+mod bonds;
 
 use std::sync::Arc;
 
@@ -11,7 +14,8 @@ use solana_pubkey::Pubkey;
 use reflect_sdk::common::Clock;
 use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
 
-pub use reflect_sdk::strategy::MintInfo;
+pub use bonds::BondVenue;
+pub use reflect_sdk::strategy::{BondMints, BondRoute, MintInfo};
 
 /// A successful quote.
 #[derive(Debug, Clone, Copy)]
