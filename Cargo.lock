@@ -2911,17 +2911,24 @@ name = "reflect-titan-bonds"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "bincode",
+ "litesvm",
  "log",
  "reflect-core-sdk",
  "reflect-routing-core",
+ "serde_json",
  "solana-account",
  "solana-instruction",
  "solana-program",
+ "solana-program-pack",
  "solana-pubkey",
+ "solana-sdk",
  "spl-associated-token-account",
  "spl-token 7.0.0",
  "spl-token-2022 9.0.0",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
