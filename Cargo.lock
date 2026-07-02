@@ -2869,9 +2869,12 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "base64 0.22.1",
  "reflect-core-sdk",
  "reflect-routing-core",
+ "serde_json",
  "solana-sdk",
+ "tokio",
 ]
 
 [[package]]
