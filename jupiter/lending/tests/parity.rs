@@ -190,10 +190,7 @@ async fn golden_account_metas_order() {
 async fn offline_cold_amm_has_no_pair() {
     let ctx = AmmContext { clock_ref: ClockRef::default() };
     let controller = Pubkey::new_unique();
-    let ka = KeyedAccount {
-        key: controller,
-        account: Account { lamports: 1, data: vec![0u8; 8], owner: Pubkey::new_unique(), executable: false, rent_epoch: 0 },
-    };
+    let ka = KeyedAccount { key: controller, account: Account { lamports: 1, data: vec![0u8; 8], owner: Pubkey::new_unique(), executable: false, rent_epoch: 0 } };
     let amm = ReflectLendingAmm::from_keyed_account(&ka, &ctx).expect("from_keyed_account");
     assert!(amm.get_reserve_mints().is_empty());
 }

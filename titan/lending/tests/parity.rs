@@ -78,8 +78,10 @@ fn resolve_programs(test: &str) -> Option<Programs> {
         eprintln!("[skip {test}] no reflect_main.so (commit tests/fixtures/programs/reflect_main.so or build reflect-core)");
         None
     })?;
-    let klend = resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"))?;
-    let kfarms = resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"))?;
+    let klend =
+        resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"))?;
+    let kfarms =
+        resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"))?;
     Some(Programs { reflect, klend, kfarms })
 }
 
@@ -243,6 +245,7 @@ fn load_svm(snap: &Snapshot, p: &Programs) -> LiteSVM {
 /// Build the adapter swap ix, fund synthetic source/dest ATAs (source `u64::MAX`,
 /// dest `0`), execute in the SVM, and return the dest balance delta. The
 /// atom-exact comparison happens at the call site.
+#[allow(clippy::too_many_arguments)] // test sim: flat args beat a one-off params struct
 fn sim_delta(svm: &mut LiteSVM, venue: &ReflectLendingVenue, user: &Keypair, in_mint: Pubkey, out_mint: Pubkey, amount: u64, in_tp: Pubkey, out_tp: Pubkey) -> Option<u64> {
     let req = QuoteRequest { input_mint: in_mint, output_mint: out_mint, amount, swap_type: SwapType::ExactIn };
     let ix = match venue.generate_swap_instruction(req, sdk_to_pk(&user.pubkey())) {

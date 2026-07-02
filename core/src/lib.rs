@@ -1,0 +1,153 @@
+//! Reflect **lending + bonds** routing: the account plumbing + SDK delegation
+//! shared by the Jupiter and Titan shims. The SDK owns all protocol math;
+//! [`LendingVenue`] / [`bonds::BondVenue`] are account plumbing plus the
+//! mint→operation dispatch.
+
+mod bonds;
+
+use std::sync::Arc;
+
+use anyhow::{anyhow, Context, Result};
+use solana_instruction::Instruction;
+use solana_pubkey::Pubkey;
+
+use reflect_sdk::common::Clock;
+use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
+
+pub use bonds::BondVenue;
+pub use reflect_sdk::strategy::{BondMints, BondRoute, MintInfo};
+
+/// A successful quote.
+#[derive(Debug, Clone, Copy)]
+pub struct RouteQuote {
+    /// Integer atom output of the counterpart mint.
+    pub amount_out: u64,
+    /// Input-denominated fee (Jupiter surfaces it; Titan ignores it).
+    pub fee: u64,
+}
+
+/// The Reflect lending strategy (deposit ↔ receipt), bound to one controller.
+/// All protocol logic is `reflect-sdk`'s; the built [`StrategyAccounts`] is
+/// cached behind an `Arc` once per [`load`](Self::load), so quote/build reuse
+/// it (Titan's `bounds()` quotes dozens of times) and `Clone` stays cheap.
+///
+/// Load is two-phase: [`seeds`](Self::seeds) → fetch →
+/// [`discovery_keys`](Self::discovery_keys) → fetch the full set →
+/// [`load`](Self::load). The shim drives the fetching (its host owns the I/O);
+/// the venue owns the key derivation and the SDK calls.
+#[derive(Clone)]
+pub struct LendingVenue {
+    program_id: Pubkey,
+    controller: Pubkey,
+    loaded: Option<Arc<StrategyAccounts>>,
+    pair: Option<TradablePair>,
+}
+
+impl LendingVenue {
+    /// Construct cold from the market account the aggregator lists: `market` is
+    /// its key, `owner` its program id.
+    pub fn from_market(market: Pubkey, owner: Pubkey) -> Self {
+        // The controller account is owned by the Reflect program; the strategy
+        // index lives in the controller bytes, read later by the SDK - so the
+        // cold seed set needs no index: [controller, pool_registry].
+        Self { program_id: owner, controller: market, loaded: None, pair: None }
+    }
+
+    /// The owning Reflect program id.
+    pub fn program_id(&self) -> Pubkey {
+        self.program_id
+    }
+
+    /// The market/pool key (one market = one mint pair).
+    pub fn market(&self) -> Pubkey {
+        self.controller
+    }
+
+    /// The accounts to fetch before the full set is known.
+    pub fn seeds(&self) -> Vec<Pubkey> {
+        vec![self.controller, pda::derive_pool_registry(&self.program_id).0]
+    }
+
+    /// Given the two seed accounts' bytes, the full set of keys to fetch
+    /// (controller and registry are included, for refetch-in-one-batch).
+    pub fn discovery_keys(&self, controller: &[u8], registry: &[u8]) -> Result<Vec<Pubkey>> {
+        lending_discovery_keys(controller, registry, &self.program_id).map_err(|e| anyhow!("discovery_keys: {e:?}"))
+    }
+
+    /// Ingest the fetched `(key, owner, data)` set: build the SDK loader once,
+    /// cache it, and resolve the tradable pair.
+    ///
+    /// # Errors
+    /// If the fetched bytes don't decode into a valid controller.
+    pub fn load(&mut self, accounts: impl IntoIterator<Item = (Pubkey, Pubkey, Vec<u8>)>) -> Result<()> {
+        let accts = StrategyAccounts::from_account_map(&self.program_id, &self.controller, accounts).map_err(|e| anyhow!("from_controller: {e:?}"))?;
+        self.pair = accts.tradable_pair().ok(); // None for reserve-only strategies
+        self.loaded = Some(Arc::new(accts));
+        Ok(())
+    }
+
+    /// The mints this venue trades (empty until loaded): `[deposit, receipt]`.
+    pub fn mints(&self) -> Vec<MintInfo> {
+        // [deposit (idx 0), receipt (idx 1)] - Titan's bounds() relies on this order.
+        self.pair.as_ref().map_or(vec![], |p| vec![p.deposit, p.receipt])
+    }
+
+    fn loaded(&self) -> Result<&StrategyAccounts> {
+        self.loaded.as_deref().context("venue not loaded")
+    }
+
+    /// Quote `amount` of `input_mint` into its counterpart mint.
+    ///
+    /// `None` is "no route": the SDK predicts a revert (supply floor / cap).
+    /// `amount == 0` returns `Some(zero)` - the documented zero-input contract
+    /// (`bounds()` binary-searches on it; never panics).
+    ///
+    /// # Errors
+    /// If the venue isn't loaded, or the SDK quote call fails (malformed state).
+    pub fn quote(&self, input_mint: Pubkey, amount: u64, clock: Clock) -> Result<Option<RouteQuote>> {
+        // Zero input is a hard contract: clean 0, never panic or error. Lending is
+        // one pair; the SDK dispatches mint/redeem on the input mint alone.
+        if amount == 0 {
+            return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
+        }
+        let q = self.loaded()?.quote_by_mints(input_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
+        // A predicted revert (supply floor / cap) is no route, not a bad route.
+        Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: q.fee }))
+    }
+
+    /// Build the swap instruction. `min_out` is baked from `slippage_bps` and
+    /// `headroom` (redeem dust); pass `0, 0` for a host that applies its own
+    /// (Jupiter's program writes the instruction data from the route context).
+    ///
+    /// # Errors
+    /// If the venue isn't loaded, or the SDK's mint/redeem build fails.
+    pub fn build(&self, user: Pubkey, input_mint: Pubkey, amount: u64, slippage_bps: u16, headroom: u64, clock: Clock) -> Result<Instruction> {
+        let accts = self.loaded()?;
+        let pair = self.pair.as_ref().context("no tradable pair")?;
+        let h = accts.lending(user, pair.deposit.pubkey, pair.deposit.token_program).map_err(|e| anyhow!("lending: {e:?}"))?;
+        // The one dispatch a venue owns: input == deposit ⇒ mint, else redeem (the
+        // SDK's TradablePair rule). Build with the request amount, not the quote.
+        let (_q, built) = if input_mint == pair.deposit.pubkey {
+            h.mint(amount, slippage_bps, clock).map_err(|e| anyhow!("mint: {e:?}"))?
+        } else {
+            h.redeem(amount, slippage_bps, headroom, clock).map_err(|e| anyhow!("redeem: {e:?}"))?
+        };
+        Ok(built.instruction)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cold_venue_has_no_mints_and_zero_quote_is_zero() {
+        let v = LendingVenue::from_market(Pubkey::new_unique(), Pubkey::new_unique());
+        assert!(v.mints().is_empty());
+        // Zero input is routable-with-zero-output, never an error, even unloaded.
+        let z = v.quote(Pubkey::new_unique(), 0, Clock { slot: 0, unix: 0 }).unwrap();
+        assert!(matches!(z, Some(RouteQuote { amount_out: 0, .. })));
+        // A real amount on an unloaded venue is an error (nothing cached).
+        assert!(v.quote(Pubkey::new_unique(), 1, Clock { slot: 0, unix: 0 }).is_err());
+    }
+}
