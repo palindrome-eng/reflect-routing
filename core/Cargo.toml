@@ -2,7 +2,7 @@
 name = "reflect-routing-core"
 version = "0.1.0"
 edition = "2021"
-description = "Program-agnostic Reflect routing venue trait; aggregator shims build on it."
+description = "Shared Reflect lending venue logic; aggregator shims wrap it."
 
 [dependencies]
 reflect-sdk = { package = "reflect-core-sdk", path = "../../reflect-core-sdk" }

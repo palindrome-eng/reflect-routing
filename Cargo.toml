@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 
-# `core` holds the program-agnostic routing trait (ReflectRoutingVenue) + the
-# strategy impls every aggregator shim delegates to. One crate per (aggregator,
+# `core` holds the shared venue logic (concrete LendingVenue: account plumbing +
+# reflect-sdk delegation) every aggregator shim wraps. One crate per (aggregator,
 # program) cell: <aggregator>/<program>. The program axis grows lending -> bonds
 # -> rlp -> whitelabel; the aggregator axis grows jupiter -> titan -> next. A new
 # cell is a new directory the glob picks up.
