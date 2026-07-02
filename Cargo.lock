@@ -2864,6 +2864,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "reflect-jupiter-bonds"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "reflect-core-sdk",
+ "reflect-routing-core",
+ "solana-sdk",
+]
+
+[[package]]
 name = "reflect-jupiter-lending"
 version = "0.1.0"
 dependencies = [
