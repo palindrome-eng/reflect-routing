@@ -1,43 +1,31 @@
 //! Reflect **lending** routing: the account plumbing + SDK delegation shared by
-//! the Jupiter and Titan shims. The SDK owns every bit of protocol math (load +
-//! quote + build); [`LendingVenue`] is account plumbing plus the mint→operation
-//! dispatch, delegated to `reflect-sdk`.
+//! the Jupiter and Titan shims. The SDK owns all protocol math; [`LendingVenue`]
+//! is account plumbing plus the mint→operation dispatch.
+
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Clock;
-use reflect_sdk::strategy::{lending_discovery_keys, pda, FetchedAccount, StrategyAccounts, TradablePair};
+use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
 
-/// A token a venue trades. Aggregators take the subset they need (Jupiter wants
-/// the pubkey; Titan wants decimals + token program for its `TokenInfo`).
-#[derive(Debug, Clone, Copy)]
-pub struct RouteMint {
-    pub pubkey: Pubkey,
-    pub decimals: u8,
-    pub token_program: Pubkey,
-}
+pub use reflect_sdk::strategy::MintInfo;
 
-/// A successful quote. `amount_out` is the integer atom output; `fee` is the
-/// input-denominated fee (Jupiter surfaces it; Titan ignores it).
+/// A successful quote.
 #[derive(Debug, Clone, Copy)]
 pub struct RouteQuote {
+    /// Integer atom output of the counterpart mint.
     pub amount_out: u64,
+    /// Input-denominated fee (Jupiter surfaces it; Titan ignores it).
     pub fee: u64,
 }
 
-/// Account bytes by key - the lookup a venue needs to discover and load state.
-/// Each aggregator shim adapts its host's fetch model (Jupiter's `AccountMap`,
-/// Titan's `AccountsCache`) to this; returns `(owner, data)`.
-pub trait AccountBytes {
-    fn get(&self, key: &Pubkey) -> Option<(Pubkey, Vec<u8>)>;
-}
-
 /// The Reflect lending strategy (deposit ↔ receipt), bound to one controller.
-/// All protocol logic is `reflect-sdk`'s. `StrategyAccounts` is not `Clone`, so
-/// the venue caches the raw bytes and rebuilds the loader per quote/build - the
-/// per-call cost both aggregators already accept.
+/// All protocol logic is `reflect-sdk`'s; the built [`StrategyAccounts`] is
+/// cached behind an `Arc` once per [`load`](Self::load), so quote/build reuse
+/// it (Titan's `bounds()` quotes dozens of times) and `Clone` stays cheap.
 ///
 /// Load is two-phase: [`seeds`](Self::seeds) → fetch →
 /// [`discovery_keys`](Self::discovery_keys) → fetch the full set →
@@ -47,7 +35,7 @@ pub trait AccountBytes {
 pub struct LendingVenue {
     program_id: Pubkey,
     controller: Pubkey,
-    bytes: Vec<FetchedAccount>,
+    loaded: Option<Arc<StrategyAccounts>>,
     pair: Option<TradablePair>,
 }
 
@@ -58,7 +46,7 @@ impl LendingVenue {
         // The controller account is owned by the Reflect program; the strategy
         // index lives in the controller bytes, read later by the SDK - so the
         // cold seed set needs no index: [controller, pool_registry].
-        Self { program_id: owner, controller: market, bytes: vec![], pair: None }
+        Self { program_id: owner, controller: market, loaded: None, pair: None }
     }
 
     /// The owning Reflect program id.
@@ -76,50 +64,42 @@ impl LendingVenue {
         vec![self.controller, pda::derive_pool_registry(&self.program_id).0]
     }
 
-    /// Given the seed accounts' bytes, the full set of keys to fetch. `None` ⇒
-    /// the seeds aren't available yet (stay cold).
-    pub fn discovery_keys(&self, seeds: &dyn AccountBytes) -> Option<Vec<Pubkey>> {
-        let reg = pda::derive_pool_registry(&self.program_id).0;
-        let (_, controller) = seeds.get(&self.controller)?;
-        let (_, registry) = seeds.get(&reg)?;
-        lending_discovery_keys(&controller, &registry, &self.program_id).ok()
+    /// Given the two seed accounts' bytes, the full set of keys to fetch
+    /// (controller and registry are included, for refetch-in-one-batch).
+    pub fn discovery_keys(&self, controller: &[u8], registry: &[u8]) -> Result<Vec<Pubkey>> {
+        lending_discovery_keys(controller, registry, &self.program_id).map_err(|e| anyhow!("discovery_keys: {e:?}"))
     }
 
-    /// Ingest the full account set; resolves the tradable pair. No-op (`Ok`)
-    /// while still cold. Idempotent.
+    /// Ingest the fetched `(key, owner, data)` set: build the SDK loader once,
+    /// cache it, and resolve the tradable pair.
     ///
     /// # Errors
     /// If the fetched bytes don't decode into a valid controller.
-    pub fn load(&mut self, accounts: &dyn AccountBytes) -> Result<()> {
-        let Some(keys) = self.discovery_keys(accounts) else {
-            return Ok(()); // cold: seeds not present yet
-        };
-        let bytes: Vec<FetchedAccount> = keys.iter().filter_map(|k| accounts.get(k).map(|(owner, data)| FetchedAccount { key: *k, owner, data })).collect();
-        let accts = StrategyAccounts::from_controller(&self.program_id, &self.controller, bytes.clone()).map_err(|e| anyhow!("from_controller: {e:?}"))?;
+    pub fn load(&mut self, accounts: impl IntoIterator<Item = (Pubkey, Pubkey, Vec<u8>)>) -> Result<()> {
+        let accts = StrategyAccounts::from_account_map(&self.program_id, &self.controller, accounts).map_err(|e| anyhow!("from_controller: {e:?}"))?;
         self.pair = accts.tradable_pair().ok(); // None for reserve-only strategies
-        self.bytes = bytes;
+        self.loaded = Some(Arc::new(accts));
         Ok(())
     }
 
     /// The mints this venue trades (empty until loaded): `[deposit, receipt]`.
-    pub fn mints(&self) -> Vec<RouteMint> {
+    pub fn mints(&self) -> Vec<MintInfo> {
         // [deposit (idx 0), receipt (idx 1)] - Titan's bounds() relies on this order.
-        let mint = |m: &reflect_sdk::strategy::MintInfo| RouteMint { pubkey: m.pubkey, decimals: m.decimals, token_program: m.token_program };
-        self.pair.as_ref().map_or(vec![], |p| vec![mint(&p.deposit), mint(&p.receipt)])
+        self.pair.as_ref().map_or(vec![], |p| vec![p.deposit, p.receipt])
     }
 
-    fn loaded(&self) -> Result<StrategyAccounts> {
-        StrategyAccounts::from_controller(&self.program_id, &self.controller, self.bytes.clone()).map_err(|e| anyhow!("from_controller: {e:?}"))
+    fn loaded(&self) -> Result<&StrategyAccounts> {
+        self.loaded.as_deref().context("venue not loaded")
     }
 
     /// Quote `amount` of `input_mint` into its counterpart mint.
     ///
-    /// `None` is "no route": the SDK predicts a revert (supply floor / cap) or the
-    /// venue isn't loaded. `amount == 0` returns `Some(zero)` - the documented
-    /// zero-input contract (`bounds()` binary-searches on it; never panics).
+    /// `None` is "no route": the SDK predicts a revert (supply floor / cap).
+    /// `amount == 0` returns `Some(zero)` - the documented zero-input contract
+    /// (`bounds()` binary-searches on it; never panics).
     ///
     /// # Errors
-    /// If the venue is loaded but the SDK quote call itself fails (malformed state).
+    /// If the venue isn't loaded, or the SDK quote call fails (malformed state).
     pub fn quote(&self, input_mint: Pubkey, amount: u64, clock: Clock) -> Result<Option<RouteQuote>> {
         // Zero input is a hard contract: clean 0, never panic or error. Lending is
         // one pair; the SDK dispatches mint/redeem on the input mint alone.
@@ -163,7 +143,7 @@ mod tests {
         // Zero input is routable-with-zero-output, never an error, even unloaded.
         let z = v.quote(Pubkey::new_unique(), 0, Clock { slot: 0, unix: 0 }).unwrap();
         assert!(matches!(z, Some(RouteQuote { amount_out: 0, .. })));
-        // A real amount on an unloaded venue is an error (no bytes to load).
+        // A real amount on an unloaded venue is an error (nothing cached).
         assert!(v.quote(Pubkey::new_unique(), 1, Clock { slot: 0, unix: 0 }).is_err());
     }
 }

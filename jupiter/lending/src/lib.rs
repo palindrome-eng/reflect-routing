@@ -16,7 +16,7 @@ use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::instruction::AccountMeta;
 use solana_sdk::pubkey::Pubkey;
 
-use reflect_routing_core::{AccountBytes, LendingVenue};
+use reflect_routing_core::LendingVenue;
 use reflect_sdk::common::Clock as ReflectClock;
 
 mod swap;
@@ -181,8 +181,6 @@ impl From<SolanaClock> for ClockRef {
 pub struct ReflectLendingAmm {
     venue: LendingVenue,
     clock_ref: ClockRef,
-    // cold → warm handshake: the two seed datas, cached so get_accounts_to_update
-    // can derive the full set without re-fetching.
     controller_data: Option<Vec<u8>>,
     pool_registry_data: Option<Vec<u8>>,
 }
@@ -190,26 +188,6 @@ pub struct ReflectLendingAmm {
 impl ReflectLendingAmm {
     fn clock(&self) -> ReflectClock {
         ReflectClock { slot: self.clock_ref.slot.load(Ordering::Relaxed), unix: self.clock_ref.unix_timestamp.load(Ordering::Relaxed) }
-    }
-}
-
-/// `AccountMap` → core lookup (the full fetched set, for `load`).
-struct MapBytes<'a>(&'a AccountMap);
-impl AccountBytes for MapBytes<'_> {
-    fn get(&self, k: &Pubkey) -> Option<(Pubkey, Vec<u8>)> {
-        self.0.get(k).map(|a| (a.owner, a.data.clone()))
-    }
-}
-
-/// The two cached seed datas → core lookup (cold phase, for `discovery_keys`).
-/// `discovery_keys` discards the owner, so seed accounts report a default one.
-struct SeedBytes<'a> {
-    seeds: &'a [Pubkey],
-    data: [&'a [u8]; 2],
-}
-impl AccountBytes for SeedBytes<'_> {
-    fn get(&self, k: &Pubkey) -> Option<(Pubkey, Vec<u8>)> {
-        self.seeds.iter().position(|s| s == k).and_then(|i| self.data.get(i)).map(|d| (Pubkey::default(), d.to_vec()))
     }
 }
 
@@ -253,10 +231,7 @@ impl Amm for ReflectLendingAmm {
     fn get_accounts_to_update(&self) -> Vec<Pubkey> {
         let seeds = self.venue.seeds();
         match (&self.controller_data, &self.pool_registry_data) {
-            (Some(c), Some(r)) => {
-                let sb = SeedBytes { seeds: &seeds, data: [c, r] };
-                self.venue.discovery_keys(&sb).unwrap_or_else(|| seeds.clone())
-            },
+            (Some(c), Some(r)) => self.venue.discovery_keys(c, r).unwrap_or_else(|_| seeds.clone()),
             _ => seeds, // cold: [controller, registry]
         }
     }
@@ -266,8 +241,13 @@ impl Amm for ReflectLendingAmm {
 
         self.controller_data = m.get(&seeds[0]).map(|a| a.data.clone());
         self.pool_registry_data = m.get(&seeds[1]).map(|a| a.data.clone());
+        let (Some(c), Some(r)) = (&self.controller_data, &self.pool_registry_data) else {
+            return Ok(()); // cold: seeds not in the map yet
+        };
 
-        self.venue.load(&MapBytes(m))
+        // A present-but-undecodable seed is an error, not "still cold".
+        let keys = self.venue.discovery_keys(c, r)?;
+        self.venue.load(keys.iter().filter_map(|k| m.get(k).map(|a| (*k, a.owner, a.data.clone()))))
     }
 
     fn quote(&self, p: &QuoteParams) -> Result<Quote> {
