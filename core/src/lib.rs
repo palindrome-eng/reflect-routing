@@ -4,6 +4,7 @@
 //! mint→operation dispatch.
 
 mod bonds;
+mod whitelabel;
 
 use std::sync::Arc;
 
@@ -11,11 +12,19 @@ use anyhow::{anyhow, Context, Result};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
+use reflect_sdk::common::ids::TOKEN_PROGRAM;
 use reflect_sdk::common::Clock;
 use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
 
 pub use bonds::BondVenue;
 pub use reflect_sdk::strategy::{BondMints, BondRoute, MintInfo};
+pub use whitelabel::{WhitelabelRoute, WhitelabelVenue};
+
+/// Decode an SPL mint account fetched alongside a venue's account set.
+pub(crate) fn spl_mint_info(mint: Pubkey, fetched: &[(Pubkey, Pubkey, Vec<u8>)]) -> Result<MintInfo> {
+    let (_, _, data) = fetched.iter().find(|(k, _, _)| *k == mint).context("mint account missing")?;
+    Ok(MintInfo { pubkey: mint, decimals: *data.get(44).context("mint account too short")?, token_program: TOKEN_PROGRAM })
+}
 
 /// A successful quote.
 #[derive(Debug, Clone, Copy)]
