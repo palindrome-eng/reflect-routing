@@ -4,6 +4,7 @@
 //! mint→operation dispatch.
 
 mod bonds;
+mod rlp;
 mod whitelabel;
 
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, Trada
 
 pub use bonds::BondVenue;
 pub use reflect_sdk::strategy::{BondMints, BondRoute, MintInfo};
+pub use rlp::{RlpRoute, RlpVenue};
 pub use whitelabel::{WhitelabelRoute, WhitelabelVenue};
 
 /// Decode an SPL mint account fetched alongside a venue's account set.
