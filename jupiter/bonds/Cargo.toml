@@ -7,7 +7,7 @@ description = "Reflect bond basket strategy as a Jupiter Amm, built on reflect-s
 [dependencies]
 reflect-routing-core = { path = "../../core" }
 reflect-jupiter-common = { path = "../common" }
-reflect-sdk = { package = "reflect-core-sdk", path = "../../../reflect-core-sdk" }
+reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git" }
 solana-sdk = "2.2"
 anyhow = "1"
 

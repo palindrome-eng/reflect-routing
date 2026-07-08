@@ -7,7 +7,7 @@ description = "Reflect whitelabel branded pair as a Titan TradingVenue, built on
 [dependencies]
 reflect-routing-core = { path = "../../core" }
 reflect-titan-common = { path = "../common" }
-reflect-sdk = { package = "reflect-core-sdk", path = "../../../reflect-core-sdk" }
+reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git" }
 
 # the vendored TradingVenue trait lives in reflect-titan-common; this crate
 # only needs the account/instruction types its own reflect.rs touches.

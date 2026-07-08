@@ -2858,6 +2858,7 @@ dependencies = [
 [[package]]
 name = "reflect-core-sdk"
 version = "0.3.0"
+source = "git+https://github.com/palindrome-eng/reflect-core-sdk.git#9a78b825c1f4e7f247352df49a88cf92d5dd6259"
 dependencies = [
  "reflect-protocol-core",
  "solana-program",
