@@ -5,22 +5,21 @@
 //! inventory, and asset access levels - so quote == execution stays exact.
 //! LP->asset is the two-transaction cooldown withdrawal: NOT routable.
 //!
-//! # Known limitation: restake may be role-gated
-//! Unlike swap (confirmed public by default - `PublicSwap` is assigned
-//! `Role::PUBLIC` in the program's `AccessControl::new_defaults()`), `restake`
-//! is gated by `Action::Restake`, which defaults to `Role::MANAGER` /
-//! `Role::TESTEE` only (reflect-program-library/rlp
-//! `programs/rlp/src/states/access.rs` `new_defaults()`,
-//! `instructions/user/restake.rs` `action_check_protocol`). Whether a given
-//! deployment's `Settings` marks `Restake` public is stored in the on-chain
-//! `AccessMap`, which the SDK does not currently decode (`SettingsView` skips
-//! straight from the count fields to the killswitch byte). This venue builds
-//! restake with `permissions: None` (the SDK handle's own default) since that
-//! is the only value an anonymous aggregator user can supply; if the live
-//! deployment has NOT marked `Restake` public, the built instruction reverts
-//! on submission (a caught simulation failure, not a fund-loss risk) rather
-//! than silently misrouting. Revisit once the SDK exposes an
-//! `is_public_action` accessor.
+//! # Known limitation: restake is role-gated by default
+//! Unlike swap (public by default - `PublicSwap` is assigned `Role::PUBLIC`
+//! in the program's `AccessControl::new_defaults()`), `restake` is gated by
+//! `Action::Restake`, which defaults to `Role::MANAGER` / `Role::TESTEE`
+//! only. PROVEN against the real program in `titan/rlp/tests/parity.rs`
+//! (`restake_role_gate_stays_closed_by_default`): an anonymous restake
+//! reverts unless the deployment adds `Role::Public` to `Action::Restake`.
+//! Whether a given deployment does is stored in the on-chain `AccessMap`,
+//! which the SDK does not currently decode (`SettingsView` skips straight
+//! from the count fields to the killswitch byte). This venue builds restake
+//! with `permissions: None` (the SDK handle's own default) since that is the
+//! only value an anonymous aggregator user can supply; on a gated deployment
+//! the built instruction reverts on submission (a caught simulation failure,
+//! not a fund-loss risk) rather than silently misrouting. Revisit once the
+//! SDK exposes an `is_public_action` accessor.
 
 use std::sync::Arc;
 

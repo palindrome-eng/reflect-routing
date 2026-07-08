@@ -11,16 +11,13 @@
 //!     Reflect instructions), indexed positionally by the eventual on-chain
 //!     handler - the binding contract handed to Jupiter.
 //!
-//! UNLIKE the Titan suite, this one is NOT backed by a LiteSVM
-//! quote==execution proof: the rlp program cannot currently be built from
-//! source (Anchor 0.29 account-validation code exceeds the current Solana
-//! platform-tools' BPF stack-frame limit - `cargo build-sbf` in
-//! `reflect-program-library/rlp` fails to emit a `.so`), rlp is not deployed
-//! on mainnet, and the devnet deployment is stale (`Settings` predates the
-//! current SDK layout). State here is hand-synthesized purely to exercise
-//! the SDK's own quote math and the adapter's plumbing - it is NOT a
-//! substitute for on-chain proof. See `RlpVenue`'s module doc for the
-//! separate, still-open restake permission-gating question.
+//! The LiteSVM quote==execution proof lives in `titan/rlp/tests/parity.rs`
+//! (both adapters delegate to the same `RlpVenue`, so it covers this shim's
+//! math too); state here is hand-synthesized purely to exercise the
+//! Jupiter-side plumbing and pin the meta order. The restake permission
+//! question is ANSWERED there: restake is MANAGER/TESTEE-gated by default
+//! and an anonymous restake reverts unless the deployment opens
+//! `Action::Restake` to `Role::Public` (see `RlpVenue`'s module doc).
 
 use std::sync::atomic::Ordering;
 

@@ -18,10 +18,11 @@ solana-account = "2.2"
 solana-instruction = "2.2"
 
 # parity.rs proves quote==execution atom-exact against a REAL rlp program built
-# from source (reflect-program-library/rlp) and initialized via its own admin
+# from source (reflect-program-library/rlp, platform-tools v1.41 ONLY - newer
+# toolchains emit stack-overflowing binaries) and initialized via its own admin
 # instructions in LiteSVM - the devnet deployment is stale (Settings layout
 # predates the current SDK) and rlp is not on mainnet, so there is nothing to
-# dump. Tests skip cleanly when the built .so is absent.
+# dump. The .so is a committed fixture; a missing fixture FAILS the test.
 [dev-dependencies]
 litesvm = "=0.6.1"
 solana-sdk = "2.2"
