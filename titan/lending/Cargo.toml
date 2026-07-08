@@ -31,7 +31,6 @@ solana-program-pack = "2.2"
 # ONLY dumps the cloned Kamino programs from RPC on demand (their .so's are 10MB
 # each — fetched + cached, never committed). reflect_main.so is the forged
 # program under test, committed alongside the fixture.
-solana-client = "2.2"
 spl-token = { version = "7", features = ["no-entrypoint"] }
 spl-associated-token-account = "6"
 serde_json = "1"

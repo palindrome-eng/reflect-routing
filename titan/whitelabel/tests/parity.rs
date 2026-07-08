@@ -54,16 +54,12 @@ fn program_path() -> PathBuf {
     manifest_rel("tests/fixtures/programs/proxy_program.so")
 }
 
-/// Committed fixture -> sibling source build -> panic. MANDATORY: parity
-/// cannot silently skip, and the mainnet program is closed (nothing to dump).
-fn resolve_program(test: &str) -> Vec<u8> {
-    let sibling = manifest_rel("../../../reflect-proxy-program/target/deploy/reflect_companion_program.so");
-    for p in [&program_path(), &sibling] {
-        if let Ok(b) = std::fs::read(p) {
-            return b;
-        }
-    }
-    panic!("[{test}] proxy_program.so fixture missing: commit {} or `cargo build-sbf` in reflect-proxy-program/program - parity fixtures are mandatory (mainnet {} is CLOSED, nothing to dump)", program_path().display(), ids::PROGRAM);
+/// The committed fixture; MANDATORY, and the mainnet program is closed
+/// (nothing to dump), so regeneration is a source build.
+fn resolve_program() -> Vec<u8> {
+    std::fs::read(program_path()).unwrap_or_else(|_| {
+        panic!("missing committed fixture {}: `cargo build-sbf` in reflect-proxy-program/program (mainnet {} is CLOSED) - parity fixtures are mandatory", program_path().display(), ids::PROGRAM)
+    })
 }
 
 // solana_account/solana_pubkey (adapter) and solana_sdk (litesvm) are the same
@@ -269,7 +265,7 @@ const SWEEP_AMOUNTS: [u64; 4] = [1_000, 1_000_000, 50_000_000, 200_000_000];
 /// commission at fixture genesis).
 #[tokio::test(flavor = "current_thread")]
 async fn parity_wrap_and_unwrap_swept() {
-    let program = resolve_program("parity_wrap_and_unwrap_swept");
+    let program = resolve_program();
     let fx = build_fixture();
     let venue = setup(&fx).await;
 
@@ -295,7 +291,7 @@ async fn parity_wrap_and_unwrap_swept() {
 /// on-chain wrap revert - they must agree.
 #[tokio::test(flavor = "current_thread")]
 async fn edges_zero_and_stale_oracle() {
-    let program = resolve_program("edges_zero_and_stale_oracle");
+    let program = resolve_program();
     let fx = build_fixture();
     let venue = setup(&fx).await;
 

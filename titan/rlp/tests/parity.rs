@@ -6,7 +6,7 @@
 //!
 //! Unlike lending/bonds there is nothing to dump: rlp is not on mainnet and the
 //! devnet deployment's `Settings` predates the current layout. The committed
-//! fixture `tests/fixtures/programs/rlp.so` is built FROM SOURCE — and the
+//! fixture `tests/fixtures/programs/rlp.so` is built FROM SOURCE - and the
 //! toolchain is LOAD-BEARING: `cargo-build-sbf --tools-version v1.41` in
 //! `reflect-program-library/rlp`. Newer platform-tools (v1.43 partially, v1.52
 //! fully) inflate the Anchor-0.29 `try_accounts`/`PreciseNumber` stack frames
@@ -21,7 +21,7 @@
 //! Also proven here, empirically, against the real program:
 //! - restake is role-gated by default (`Action::Restake` -> MANAGER/TESTEE):
 //!   an anonymous venue-built restake REVERTS unless the deployment adds
-//!   `Role::Public` to `Action::Restake` — the open question in `RlpVenue`'s
+//!   `Role::Public` to `Action::Restake` - the open question in `RlpVenue`'s
 //!   module doc, now pinned by `restake_role_gate_stays_closed_by_default`.
 //! - the venue's predicted-revert quotes (`None`: killswitch, stale oracle,
 //!   swap inventory) agree with on-chain reverts.
@@ -54,17 +54,11 @@ fn manifest_rel(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
-/// Committed fixture first, then the sibling source build. MANDATORY: parity
-/// cannot silently skip, so an unresolvable program is a panic.
+/// The committed fixture; MANDATORY. Regenerate ONLY with
+/// `cargo-build-sbf --tools-version v1.41` (see the header).
 fn program_bytes() -> Vec<u8> {
-    let committed = manifest_rel("tests/fixtures/programs/rlp.so");
-    let sibling = manifest_rel("../../../reflect-program-library/rlp/target/deploy/rlp.so");
-    for p in [&committed, &sibling] {
-        if let Ok(b) = std::fs::read(p) {
-            return b;
-        }
-    }
-    panic!("rlp.so fixture missing: commit {} or `cargo build-sbf` in reflect-program-library/rlp — parity is mandatory, not skippable", committed.display());
+    let path = manifest_rel("tests/fixtures/programs/rlp.so");
+    std::fs::read(&path).unwrap_or_else(|_| panic!("missing committed fixture {} - parity fixtures are mandatory", path.display()))
 }
 
 // solana_pubkey/solana_account (adapter+SDK) and solana_sdk (litesvm) are the
@@ -86,7 +80,7 @@ fn to_sdk_ix(ix: &solana_instruction::Instruction) -> solana_sdk::instruction::I
     }
 }
 
-/// `pyth_solana_receiver_sdk::ID` — `add_asset` tags an oracle Pyth iff the
+/// `pyth_solana_receiver_sdk::ID` - `add_asset` tags an oracle Pyth iff the
 /// account is OWNED by this program (the only owner check the program makes).
 const PYTH_RECEIVER: &str = "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ";
 /// Anchor discriminator of `PriceUpdateV2` (`sha256("account:PriceUpdateV2")`).
@@ -111,6 +105,9 @@ fn pyth_oracle_account(price: i64, exponent: i32, publish_time: i64) -> Account 
     d[93..101].copy_from_slice(&publish_time.to_le_bytes());
     d[101..109].copy_from_slice(&publish_time.to_le_bytes()); // prev_publish_time
     d[109..117].copy_from_slice(&price.to_le_bytes()); // ema_price
+    // Fixture lamports here and below: rent-exempt minimum is
+    // (data_len + 128) * 6960 (2 years at 3480 lamports/byte-year); 10M
+    // comfortably covers 133B (min 1_816_560).
     Account { lamports: 10_000_000, data: d, owner: pk(PYTH_RECEIVER), executable: false, rent_epoch: 0 }
 }
 
@@ -125,6 +122,7 @@ fn mint_account(authority: &Pubkey, supply: u64, decimals: u8) -> Account {
         freeze_authority: spl_token::solana_program::program_option::COption::None,
     };
     spl_token::state::Mint::pack(state, &mut data).expect("pack mint");
+    // (82 + 128) * 6960: the exact rent-exempt minimum for a Mint.
     Account { lamports: 1_461_600, data, owner: TOKEN_PROGRAM, executable: false, rent_epoch: 0 }
 }
 
@@ -133,6 +131,7 @@ fn token_account(mint: &Pubkey, owner: &Pubkey, amount: u64) -> Account {
     let mut data = vec![0u8; spl_token::state::Account::LEN];
     let state = spl_token::state::Account { mint: sdk_key(mint), owner: sdk_key(owner), amount, state: spl_token::state::AccountState::Initialized, ..Default::default() };
     spl_token::state::Account::pack(state, &mut data).expect("pack token account");
+    // (165 + 128) * 6960: the exact rent-exempt minimum for a TokenAccount.
     Account { lamports: 2_039_280, data, owner: TOKEN_PROGRAM, executable: false, rent_epoch: 0 }
 }
 
@@ -164,7 +163,7 @@ impl Fx {
     }
 }
 
-/// Execute instructions as one tx; panic with logs on failure — fixture
+/// Execute instructions as one tx; panic with logs on failure - fixture
 /// bootstrap must never half-succeed silently.
 fn send(svm: &mut LiteSVM, label: &str, ix: solana_program::instruction::Instruction, payer: &Keypair) {
     let tx = Transaction::new_signed_with_payer(&[to_sdk_ix(&ix)], Some(&payer.pubkey()), &[payer], svm.latest_blockhash());
@@ -286,7 +285,7 @@ async fn setup(svm: &LiteSVM, fx: &Fx) -> ReflectRlpVenue {
 }
 
 /// Build the venue's instruction, execute it, and return the out-mint balance
-/// delta. `None` = the tx failed (logged) — the revert side of a `None` quote.
+/// delta. `None` = the tx failed (logged) - the revert side of a `None` quote.
 fn sim_delta(svm: &mut LiteSVM, venue: &ReflectRlpVenue, fx: &Fx, in_mint: Pubkey, out_mint: Pubkey, amount: u64) -> Option<u64> {
     let req = QuoteRequest { input_mint: in_mint, output_mint: out_mint, amount, swap_type: SwapType::ExactIn };
     let ix = match venue.generate_swap_instruction(req, sdk_to_pk(&fx.user.pubkey())) {
@@ -347,7 +346,7 @@ async fn parity_restake_and_swap_swept() {
 }
 
 /// DEFAULT access map: restake is MANAGER/TESTEE-gated, the venue cannot see
-/// that (Settings' AccessMap is not decoded by the SDK), so it quotes Some —
+/// that (Settings' AccessMap is not decoded by the SDK), so it quotes Some -
 /// and the on-chain execution with `permissions: None` MUST revert. This pins
 /// the documented known-limitation in `RlpVenue`'s module doc to real program
 /// behavior; if the SDK learns to model the gate, this test flips and says so.
@@ -400,7 +399,7 @@ async fn swap_inventory_guard_agrees() {
     assert!(sim_delta(&mut svm, &venue, &fx, fx.mint_a, fx.mint_b, amt).is_none(), "over-inventory swap must revert");
 }
 
-/// Stale oracle (> 120s unix): quote None, execution reverts — same window in
+/// Stale oracle (> 120s unix): quote None, execution reverts - same window in
 /// the SDK and the program (`ORACLE_MAXIMUM_AGE = 2 * 60`).
 #[tokio::test(flavor = "current_thread")]
 async fn stale_oracle_agrees() {

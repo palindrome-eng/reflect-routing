@@ -12,12 +12,8 @@
 //! quote, re-executes the adapter-built ix in the SAME instance, and asserts the
 //! dest-balance delta equals the quote.
 //!
-//! MANDATORY: a missing fixture is a test FAILURE, not a skip. Quote-only
-//! tests need just the committed JSON fixture. Execution needs three programs
-//! via [`resolve_programs`] — `reflect_main.so` and the Kamino `.so`s are
-//! committed; absent that, the Kamino blobs RPC-dump + cache on first run with
-//! `SOLANA_RPC_URL`, else resolve from a sibling reflect-core checkout, else
-//! the test PANICS with the recovery instructions.
+//! MANDATORY: the fixture JSON and all three program `.so`s are COMMITTED
+//! under `tests/fixtures/`; a missing fixture is a test FAILURE, not a skip.
 //!
 //! Regenerate the fixture (reflect-core stays clean): apply
 //! `tests/fixtures/forge-dump.patch` to a reflect-core checkout, run
@@ -53,14 +49,10 @@ fn manifest_rel(rel: &str) -> PathBuf {
 fn fixture_path() -> PathBuf {
     manifest_rel("tests/fixtures/forged_reserve_kamino.json")
 }
-/// Where resolved program `.so`s live in THIS repo. `reflect_main.so` is
-/// committed here (the forged program — paired with the fixture); the Kamino
-/// blobs are RPC-fetched + cached here and gitignored.
+/// The committed program fixtures live here, next to the JSON snapshot.
 fn programs_dir() -> PathBuf {
     manifest_rel("tests/fixtures/programs")
 }
-// reflect-core is a sibling checkout (a fallback for the dev who regenerates).
-const CORE: &str = "../../../reflect-core";
 
 /// The program bytes needed to EXECUTE, resolved once and reused across the
 /// per-amount LiteSVM rebuilds.
@@ -70,59 +62,13 @@ struct Programs {
     kfarms: Vec<u8>,
 }
 
-/// Resolve all three programs; MANDATORY, so an unresolvable program panics
-/// with recovery instructions. Kamino blobs RPC-dump on first run when
-/// `SOLANA_RPC_URL` is set; `reflect_main.so` cannot (its forged program id is
-/// not deployed), so it must be committed or built in the sibling.
-fn resolve_programs(test: &str) -> Programs {
-    let reflect = read_first(&[programs_dir().join("reflect_main.so"), manifest_rel(CORE).join("target/deploy/reflect_main.so")])
-        .unwrap_or_else(|| panic!("[{test}] no reflect_main.so (commit tests/fixtures/programs/reflect_main.so or build reflect-core) - parity fixtures are mandatory"));
-    let klend =
-        resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"));
-    let kfarms =
-        resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"));
-    Programs { reflect, klend, kfarms }
+fn program(file: &str) -> Vec<u8> {
+    let path = programs_dir().join(file);
+    std::fs::read(&path).unwrap_or_else(|_| panic!("missing committed fixture {} - see the header for regeneration; parity fixtures are mandatory", path.display()))
 }
 
-fn read_first(paths: &[PathBuf]) -> Option<Vec<u8>> {
-    paths.iter().find(|p| p.exists()).and_then(|p| std::fs::read(p).ok())
-}
-
-/// A cloned mainnet program: local cache → sibling reflect-core fixture → RPC
-/// dump into the local cache (needs `SOLANA_RPC_URL`).
-fn resolve_cloned(test: &str, file: &str, program_id: &str, sibling: PathBuf) -> Vec<u8> {
-    let cache = programs_dir().join(file);
-    if let Some(b) = read_first(&[cache.clone(), sibling]) {
-        return b;
-    }
-    let url = std::env::var("SOLANA_RPC_URL")
-        .unwrap_or_else(|_| panic!("[{test}] {file} absent and SOLANA_RPC_URL unset — set it to fetch {program_id} once; parity fixtures are mandatory"));
-    eprintln!("[parity] dumping {program_id} from RPC → {}", cache.display());
-    let so = dump_program(&url, &pk(program_id)).unwrap_or_else(|| panic!("[{test}] failed to dump {program_id} from {url}"));
-    let _ = std::fs::create_dir_all(programs_dir());
-    let _ = std::fs::write(&cache, &so);
-    so
-}
-
-/// Fetch a BPF-upgradeable program's ELF bytes over JSON-RPC (`solana program
-/// dump` equivalent): the Program account holds the ProgramData pubkey; the ELF
-/// follows the ProgramData metadata header. The blocking `RpcClient` spins its
-/// own runtime, so it runs on a plain thread — calling it from the `#[tokio::test]`
-/// context directly panics ("runtime within a runtime").
-fn dump_program(url: &str, program_id: &Pubkey) -> Option<Vec<u8>> {
-    let (url, id) = (url.to_string(), *program_id);
-    std::thread::spawn(move || {
-        use solana_client::rpc_client::RpcClient;
-        let rpc = RpcClient::new(url);
-        let prog = rpc.get_account(&sdk_key(&id)).ok()?;
-        // Upgradeable Program account: enum tag (4) + ProgramData pubkey (32).
-        let programdata = solana_sdk::pubkey::Pubkey::try_from(prog.data.get(4..36)?).ok()?;
-        let pd = rpc.get_account(&programdata).ok()?;
-        // ProgramData metadata: enum(4) + slot(8) + Option<Pubkey>(1+32) = 45, then ELF.
-        pd.data.get(45..).map(<[u8]>::to_vec)
-    })
-    .join()
-    .ok()?
+fn resolve_programs() -> Programs {
+    Programs { reflect: program("reflect_main.so"), klend: program("kamino_lend_program_2.so"), kfarms: program("kamino_farm_program_2.so") }
 }
 
 /// Parsed fixture: the program id the controller is owned by, the controller
@@ -344,7 +290,7 @@ const REDEEM_LO: u64 = 1_000_000; // above the withdraw-dust revert threshold
 /// the band endpoints + a log-uniform sweep (≥50 each).
 #[tokio::test(flavor = "current_thread")]
 async fn parity_swept_both_directions() {
-    let programs = resolve_programs("parity_swept_both_directions");
+    let programs = resolve_programs();
     let (venue, snap, deposit, receipt) = setup().await;
 
     // (in, out, lo, hi) per direction. Mint uses a fixed sub-cap band; redeem
@@ -407,7 +353,7 @@ async fn edges_zero_and_redeem_floor() {
 /// `LendingQuoteCtx::quote_mint`.)
 #[tokio::test(flavor = "current_thread")]
 async fn mint_quote_caps_above_mintable() {
-    let programs = resolve_programs("mint_quote_caps_above_mintable");
+    let programs = resolve_programs();
     let (venue, snap, deposit, receipt) = setup().await;
     let over_cap = 2_000_000_000_000_000u64; // 2× the 1e15 controller cap
 

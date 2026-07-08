@@ -77,7 +77,7 @@ fn load_snapshot() -> Snapshot {
 /// ingests the discovery set). Program id flows from the controller's owner, so
 /// everything resolves against the forge's id with nothing hardcoded.
 fn setup() -> (ReflectLendingAmm, Snapshot, ClockRef) {
-    assert!(fixture_path().exists(), "missing forged fixture {} — regenerate via reflect-core (see Titan parity docs); parity fixtures are mandatory", fixture_path().display());
+    assert!(fixture_path().exists(), "missing forged fixture {} - regenerate via reflect-core (see Titan parity docs); parity fixtures are mandatory", fixture_path().display());
     let snap = load_snapshot();
     let clock_ref: ClockRef = snap.clock.clone().into();
     let ctx = AmmContext { clock_ref: clock_ref.clone() };
