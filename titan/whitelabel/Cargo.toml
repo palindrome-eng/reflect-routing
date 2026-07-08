@@ -20,13 +20,12 @@ solana-instruction = "2.2"
 # parity.rs proves quote==execution atom-exact against hand-synthesized proxy
 # state (ProxyState/Oracle are hand-buildable; no forge needed) executed
 # against the LIVE mainnet proxy program .so, dumped via SOLANA_RPC_URL and
-# cached (never committed) - the Kamino resolver pattern from
-# titan/lending/tests/parity.rs. Tests skip cleanly when the .so is absent.
+# committed as a fixture - the Kamino resolver pattern from
+# titan/lending/tests/parity.rs. A missing fixture FAILS the test.
 [dev-dependencies]
 litesvm = "=0.6.1"
 solana-sdk = "2.2"
 solana-program-pack = "2.2"
-solana-client = "2.2"
 spl-token = { version = "7", features = ["no-entrypoint"] }
 spl-associated-token-account = "6"
 bincode = "1.3"

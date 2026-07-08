@@ -23,6 +23,7 @@ target
 # Lavish/redline review artifacts (session-local)
 .lavish/
 
-# Tier 1 parity harness: locally-dumped on-chain programs (solana program dump),
-# not committed — see titan/lending/tests/parity.rs for the dump command.
-**/tests/programs/*.so
+# Tier 1 parity fixtures: program .so files are COMMITTED (parity is mandatory
+# and most sources are irreplaceable - forged ids, closed mainnet deployments,
+# toolchain-pinned builds). Only the re-fetchable Kamino clones stay ignored,
+# via titan/lending/tests/fixtures/programs/.gitignore.

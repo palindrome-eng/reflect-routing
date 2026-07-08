@@ -12,11 +12,12 @@
 //! quote, re-executes the adapter-built ix in the SAME instance, and asserts the
 //! dest-balance delta equals the quote.
 //!
-//! PORTABLE/OFFLINE: quote-only tests need just the committed JSON fixture.
-//! Execution needs three programs via [`resolve_programs`] — `reflect_main.so` is
-//! committed (its forge id is not on mainnet, so unfetchable); the Kamino `.so`s
-//! (10MB) are RPC-dumped + cached on first run with `SOLANA_RPC_URL`, else taken
-//! from a sibling reflect-core checkout, else the execution tests skip.
+//! MANDATORY: a missing fixture is a test FAILURE, not a skip. Quote-only
+//! tests need just the committed JSON fixture. Execution needs three programs
+//! via [`resolve_programs`] — `reflect_main.so` and the Kamino `.so`s are
+//! committed; absent that, the Kamino blobs RPC-dump + cache on first run with
+//! `SOLANA_RPC_URL`, else resolve from a sibling reflect-core checkout, else
+//! the test PANICS with the recovery instructions.
 //!
 //! Regenerate the fixture (reflect-core stays clean): apply
 //! `tests/fixtures/forge-dump.patch` to a reflect-core checkout, run
@@ -69,20 +70,18 @@ struct Programs {
     kfarms: Vec<u8>,
 }
 
-/// Resolve all three programs, or `None` (with a skip reason) when a fresh clone
-/// can't get them — keeping `cargo test` green offline. Kamino blobs RPC-dump on
-/// first run when `SOLANA_RPC_URL` is set; `reflect_main.so` cannot (its forged
-/// program id is not deployed), so it must be committed or built in the sibling.
-fn resolve_programs(test: &str) -> Option<Programs> {
-    let reflect = read_first(&[programs_dir().join("reflect_main.so"), manifest_rel(CORE).join("target/deploy/reflect_main.so")]).or_else(|| {
-        eprintln!("[skip {test}] no reflect_main.so (commit tests/fixtures/programs/reflect_main.so or build reflect-core)");
-        None
-    })?;
+/// Resolve all three programs; MANDATORY, so an unresolvable program panics
+/// with recovery instructions. Kamino blobs RPC-dump on first run when
+/// `SOLANA_RPC_URL` is set; `reflect_main.so` cannot (its forged program id is
+/// not deployed), so it must be committed or built in the sibling.
+fn resolve_programs(test: &str) -> Programs {
+    let reflect = read_first(&[programs_dir().join("reflect_main.so"), manifest_rel(CORE).join("target/deploy/reflect_main.so")])
+        .unwrap_or_else(|| panic!("[{test}] no reflect_main.so (commit tests/fixtures/programs/reflect_main.so or build reflect-core) - parity fixtures are mandatory"));
     let klend =
-        resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"))?;
+        resolve_cloned(test, "kamino_lend_program_2.so", KAMINO_LEND, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_lend/kamino_lend_program_2.so"));
     let kfarms =
-        resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"))?;
-    Some(Programs { reflect, klend, kfarms })
+        resolve_cloned(test, "kamino_farm_program_2.so", KAMINO_FARMS, manifest_rel(CORE).join("programs/reflect-main/tests/fixtures/kamino_farms/kamino_farm_program_2.so"));
+    Programs { reflect, klend, kfarms }
 }
 
 fn read_first(paths: &[PathBuf]) -> Option<Vec<u8>> {
@@ -91,20 +90,18 @@ fn read_first(paths: &[PathBuf]) -> Option<Vec<u8>> {
 
 /// A cloned mainnet program: local cache → sibling reflect-core fixture → RPC
 /// dump into the local cache (needs `SOLANA_RPC_URL`).
-fn resolve_cloned(test: &str, file: &str, program_id: &str, sibling: PathBuf) -> Option<Vec<u8>> {
+fn resolve_cloned(test: &str, file: &str, program_id: &str, sibling: PathBuf) -> Vec<u8> {
     let cache = programs_dir().join(file);
     if let Some(b) = read_first(&[cache.clone(), sibling]) {
-        return Some(b);
+        return b;
     }
-    let Ok(url) = std::env::var("SOLANA_RPC_URL") else {
-        eprintln!("[skip {test}] {file} absent and SOLANA_RPC_URL unset — set it to fetch {program_id} once");
-        return None;
-    };
+    let url = std::env::var("SOLANA_RPC_URL")
+        .unwrap_or_else(|_| panic!("[{test}] {file} absent and SOLANA_RPC_URL unset — set it to fetch {program_id} once; parity fixtures are mandatory"));
     eprintln!("[parity] dumping {program_id} from RPC → {}", cache.display());
-    let so = dump_program(&url, &pk(program_id))?;
+    let so = dump_program(&url, &pk(program_id)).unwrap_or_else(|| panic!("[{test}] failed to dump {program_id} from {url}"));
     let _ = std::fs::create_dir_all(programs_dir());
     let _ = std::fs::write(&cache, &so);
-    Some(so)
+    so
 }
 
 /// Fetch a BPF-upgradeable program's ELF bytes over JSON-RPC (`solana program
@@ -310,22 +307,19 @@ fn token_balance(svm: &LiteSVM, ata: solana_sdk::pubkey::Pubkey) -> Option<u64> 
 
 /// Build the venue from the forged controller account and `update_state` it off
 /// the snapshot. Returns the venue + snapshot + the (mint, token-program) pairs.
-async fn setup() -> Option<(ReflectLendingVenue, Snapshot, (Pubkey, Pubkey), (Pubkey, Pubkey))> {
+async fn setup() -> (ReflectLendingVenue, Snapshot, (Pubkey, Pubkey), (Pubkey, Pubkey)) {
     let snap = load_snapshot();
-    let ctrl = snap.map.get(&snap.controller)?.clone();
-    let mut venue = ReflectLendingVenue::from_account(&snap.controller, &ctrl).ok()?;
+    let ctrl = snap.map.get(&snap.controller).expect("controller in snapshot").clone();
+    let mut venue = ReflectLendingVenue::from_account(&snap.controller, &ctrl).expect("from_account");
     let cache = SnapshotCache { map: snap.map.clone() };
-    venue.update_state(&cache).await.ok()?;
+    venue.update_state(&cache).await.expect("update_state");
 
     let toks = venue.get_token_info().to_vec();
-    if toks.len() != 2 {
-        eprintln!("[skip] venue resolved {} tokens, expected 2", toks.len());
-        return None;
-    }
+    assert_eq!(toks.len(), 2, "snapshot must yield a tradable venue");
 
     let (deposit, receipt) = (&toks[0], &toks[1]);
     let tp = |t22: bool| if t22 { TOKEN_2022_PROGRAM } else { TOKEN_PROGRAM };
-    Some((venue, snap, (deposit.pubkey, tp(deposit.is_token_2022)), (receipt.pubkey, tp(receipt.is_token_2022))))
+    (venue, snap, (deposit.pubkey, tp(deposit.is_token_2022)), (receipt.pubkey, tp(receipt.is_token_2022)))
 }
 
 /// Log-uniform amount sweep over `[lo, hi]`, `n` samples, deterministic seed.
@@ -350,13 +344,8 @@ const REDEEM_LO: u64 = 1_000_000; // above the withdraw-dust revert threshold
 /// the band endpoints + a log-uniform sweep (≥50 each).
 #[tokio::test(flavor = "current_thread")]
 async fn parity_swept_both_directions() {
-    let Some(programs) = resolve_programs("parity_swept_both_directions") else {
-        return;
-    };
-    let Some((venue, snap, deposit, receipt)) = setup().await else {
-        eprintln!("[skip] snapshot did not yield a tradable venue");
-        return;
-    };
+    let programs = resolve_programs("parity_swept_both_directions");
+    let (venue, snap, deposit, receipt) = setup().await;
 
     // (in, out, lo, hi) per direction. Mint uses a fixed sub-cap band; redeem
     // uses the venue's own (correct) would_revert ceiling from bounds(1,0).
@@ -380,13 +369,7 @@ async fn parity_swept_both_directions() {
 /// from the committed fixture, no `.so`s needed.
 #[tokio::test(flavor = "current_thread")]
 async fn parity_roundtrip_identity() {
-    if !fixture_path().exists() {
-        eprintln!("[skip parity_roundtrip_identity] missing fixture");
-        return;
-    }
-    let Some((venue, _snap, deposit, receipt)) = setup().await else {
-        return;
-    };
+    let (venue, _snap, deposit, receipt) = setup().await;
     let amount = 100_000_000u64; // 100 USDC — mid of both directions' valid bands
 
     let q1 = venue.quote(QuoteRequest { input_mint: deposit.0, output_mint: receipt.0, amount, swap_type: SwapType::ExactIn }).expect("mint quote");
@@ -402,13 +385,7 @@ async fn parity_roundtrip_identity() {
 /// Quote-only.
 #[tokio::test(flavor = "current_thread")]
 async fn edges_zero_and_redeem_floor() {
-    if !fixture_path().exists() {
-        eprintln!("[skip edges_zero_and_redeem_floor] missing fixture");
-        return;
-    }
-    let Some((venue, _snap, deposit, receipt)) = setup().await else {
-        return;
-    };
+    let (venue, _snap, deposit, receipt) = setup().await;
     for (a, b) in [(deposit.0, receipt.0), (receipt.0, deposit.0)] {
         let z = venue.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 0, swap_type: SwapType::ExactIn }).expect("zero quote");
         assert_eq!(z.expected_output, 0);
@@ -430,12 +407,8 @@ async fn edges_zero_and_redeem_floor() {
 /// `LendingQuoteCtx::quote_mint`.)
 #[tokio::test(flavor = "current_thread")]
 async fn mint_quote_caps_above_mintable() {
-    let Some(programs) = resolve_programs("mint_quote_caps_above_mintable") else {
-        return;
-    };
-    let Some((venue, snap, deposit, receipt)) = setup().await else {
-        return;
-    };
+    let programs = resolve_programs("mint_quote_caps_above_mintable");
+    let (venue, snap, deposit, receipt) = setup().await;
     let over_cap = 2_000_000_000_000_000u64; // 2× the 1e15 controller cap
 
     let q = venue.quote(QuoteRequest { input_mint: deposit.0, output_mint: receipt.0, amount: over_cap, swap_type: SwapType::ExactIn }).expect("quote");

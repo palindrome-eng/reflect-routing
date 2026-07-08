@@ -7,13 +7,14 @@
 //! Unlike lending/bonds, whitelabel needs NO forge: `ProxyState`/`Oracle` are
 //! tiny, discriminator-free structs (verified byte-for-byte against
 //! `reflect-proxy-program/program/src/{state,helpers}.rs`), so the state is
-//! hand-synthesized here and executed against the LIVE mainnet proxy program
-//! `.so` (`ProxycrBkRh1S1241nBRkqrJTgTX1ginHDR8xTLjYSE`), resolved once and
-//! cached like the Kamino programs in `titan/lending/tests/parity.rs`.
+//! hand-synthesized here and executed against the real proxy program `.so`.
+//! The mainnet deployment (`ProxycrBkRh1S1241nBRkqrJTgTX1ginHDR8xTLjYSE`) was
+//! CLOSED (found 2026-07-08), so there is nothing left to dump: the committed
+//! fixture `tests/fixtures/programs/proxy_program.so` is built from source
+//! (`cargo build-sbf` in `reflect-proxy-program/program` ->
+//! `reflect_companion_program.so`; pinocchio, no Anchor toolchain hazards).
 //!
-//! PORTABLE/OFFLINE: `cargo test` stays green with no network and no cached
-//! `.so` — execution tests skip with an eprintln. Set `SOLANA_RPC_URL` once to
-//! populate `tests/fixtures/programs/proxy_program.so` (gitignored, ~2MB).
+//! MANDATORY: a missing fixture is a test FAILURE, not a skip.
 //!
 //! On-chain checks this harness satisfies (read from source, not assumed):
 //! - `Oracle::load` requires the oracle account's KEY to equal the pinned
@@ -53,44 +54,16 @@ fn program_path() -> PathBuf {
     manifest_rel("tests/fixtures/programs/proxy_program.so")
 }
 
-/// Local cache -> RPC dump (needs `SOLANA_RPC_URL`) -> `None` with a skip
-/// reason, keeping `cargo test` green offline. Mirrors
-/// `titan/lending/tests/parity.rs`'s Kamino resolver, but for the whitelabel
-/// program itself: nothing here is forged, so there is no first-party binary
-/// to commit.
-fn resolve_program(test: &str) -> Option<Vec<u8>> {
-    let cache = program_path();
-    if cache.exists() {
-        return std::fs::read(&cache).ok();
+/// Committed fixture -> sibling source build -> panic. MANDATORY: parity
+/// cannot silently skip, and the mainnet program is closed (nothing to dump).
+fn resolve_program(test: &str) -> Vec<u8> {
+    let sibling = manifest_rel("../../../reflect-proxy-program/target/deploy/reflect_companion_program.so");
+    for p in [&program_path(), &sibling] {
+        if let Ok(b) = std::fs::read(p) {
+            return b;
+        }
     }
-    let Ok(url) = std::env::var("SOLANA_RPC_URL") else {
-        eprintln!("[skip {test}] proxy_program.so absent and SOLANA_RPC_URL unset - set it to fetch {} once", ids::PROGRAM);
-        return None;
-    };
-    eprintln!("[parity] dumping {} from RPC -> {}", ids::PROGRAM, cache.display());
-    let so = dump_program(&url, &ids::PROGRAM)?;
-    let _ = std::fs::create_dir_all(program_path().parent().unwrap());
-    let _ = std::fs::write(&cache, &so);
-    Some(so)
-}
-
-/// Fetch a BPF-upgradeable program's ELF bytes over JSON-RPC (`solana program
-/// dump` equivalent). The blocking `RpcClient` spins its own runtime, so it
-/// runs on a plain thread — calling it from `#[tokio::test]` directly panics.
-fn dump_program(url: &str, program_id: &Pubkey) -> Option<Vec<u8>> {
-    let (url, id) = (url.to_string(), *program_id);
-    std::thread::spawn(move || {
-        use solana_client::rpc_client::RpcClient;
-        let rpc = RpcClient::new(url);
-        let prog = rpc.get_account(&sdk_key(&id)).ok()?;
-        // Upgradeable Program account: enum tag (4) + ProgramData pubkey (32).
-        let programdata = solana_sdk::pubkey::Pubkey::try_from(prog.data.get(4..36)?).ok()?;
-        let pd = rpc.get_account(&programdata).ok()?;
-        // ProgramData metadata: enum(4) + slot(8) + Option<Pubkey>(1+32) = 45, then ELF.
-        pd.data.get(45..).map(<[u8]>::to_vec)
-    })
-    .join()
-    .ok()?
+    panic!("[{test}] proxy_program.so fixture missing: commit {} or `cargo build-sbf` in reflect-proxy-program/program - parity fixtures are mandatory (mainnet {} is CLOSED, nothing to dump)", program_path().display(), ids::PROGRAM);
 }
 
 // solana_account/solana_pubkey (adapter) and solana_sdk (litesvm) are the same
@@ -296,9 +269,7 @@ const SWEEP_AMOUNTS: [u64; 4] = [1_000, 1_000_000, 50_000_000, 200_000_000];
 /// commission at fixture genesis).
 #[tokio::test(flavor = "current_thread")]
 async fn parity_wrap_and_unwrap_swept() {
-    let Some(program) = resolve_program("parity_wrap_and_unwrap_swept") else {
-        return;
-    };
+    let program = resolve_program("parity_wrap_and_unwrap_swept");
     let fx = build_fixture();
     let venue = setup(&fx).await;
 
@@ -324,9 +295,7 @@ async fn parity_wrap_and_unwrap_swept() {
 /// on-chain wrap revert - they must agree.
 #[tokio::test(flavor = "current_thread")]
 async fn edges_zero_and_stale_oracle() {
-    let Some(program) = resolve_program("edges_zero_and_stale_oracle") else {
-        return;
-    };
+    let program = resolve_program("edges_zero_and_stale_oracle");
     let fx = build_fixture();
     let venue = setup(&fx).await;
 

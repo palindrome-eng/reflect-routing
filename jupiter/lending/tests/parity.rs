@@ -76,26 +76,20 @@ fn load_snapshot() -> Snapshot {
 /// Wire the Jupiter Amm from the snapshot (cold `from_keyed_account` → `update`
 /// ingests the discovery set). Program id flows from the controller's owner, so
 /// everything resolves against the forge's id with nothing hardcoded.
-fn setup() -> Option<(ReflectLendingAmm, Snapshot, ClockRef)> {
-    if !fixture_path().exists() {
-        eprintln!("[skip] missing forged fixture {} — regenerate via reflect-core (see Titan parity docs)", fixture_path().display());
-        return None;
-    }
+fn setup() -> (ReflectLendingAmm, Snapshot, ClockRef) {
+    assert!(fixture_path().exists(), "missing forged fixture {} — regenerate via reflect-core (see Titan parity docs); parity fixtures are mandatory", fixture_path().display());
     let snap = load_snapshot();
     let clock_ref: ClockRef = snap.clock.clone().into();
     let ctx = AmmContext { clock_ref: clock_ref.clone() };
-    let ka = KeyedAccount { key: snap.controller, account: snap.map.get(&snap.controller)?.clone(), params: None };
+    let ka = KeyedAccount { key: snap.controller, account: snap.map.get(&snap.controller).expect("controller in snapshot").clone(), params: None };
 
-    let mut amm = ReflectLendingAmm::from_keyed_account(&ka, &ctx).ok()?;
-    amm.update(&snap.map).ok()?;
+    let mut amm = ReflectLendingAmm::from_keyed_account(&ka, &ctx).expect("from_keyed_account");
+    amm.update(&snap.map).expect("update round 1");
     if amm.get_reserve_mints().len() != 2 {
-        amm.update(&snap.map).ok()?; // re-run after dynamic accounts resolved
+        amm.update(&snap.map).expect("update round 2"); // re-run after dynamic accounts resolved
     }
-    if amm.get_reserve_mints().len() != 2 {
-        eprintln!("[skip] Jupiter amm did not resolve a pair");
-        return None;
-    }
-    Some((amm, snap, clock_ref))
+    assert_eq!(amm.get_reserve_mints().len(), 2, "Jupiter amm must resolve a pair");
+    (amm, snap, clock_ref)
 }
 
 /// Reflect SDK quote over the same bytes — the independent oracle both adapters
@@ -117,9 +111,7 @@ fn sdk_quote(snap: &Snapshot, input_mint: Pubkey, amount: u64, clock: &ClockRef)
 /// on-chain execution via the Titan suite). Both directions, swept amounts.
 #[tokio::test(flavor = "current_thread")]
 async fn jupiter_quote_equals_sdk() {
-    let Some((amm, snap, clock)) = setup() else {
-        return;
-    };
+    let (amm, snap, clock) = setup();
     let mints = amm.get_reserve_mints();
     let (deposit, receipt) = (mints[0], mints[1]);
 
@@ -137,9 +129,7 @@ async fn jupiter_quote_equals_sdk() {
 /// Jupiter adapter returns `Err` (no route, not a bad route).
 #[tokio::test(flavor = "current_thread")]
 async fn jupiter_quote_errs_on_would_revert() {
-    let Some((amm, _snap, _clock)) = setup() else {
-        return;
-    };
+    let (amm, _snap, _clock) = setup();
     let mints = amm.get_reserve_mints();
     let r = amm.quote(&QuoteParams { amount: u64::MAX, input_mint: mints[0], output_mint: mints[1], swap_mode: SwapMode::ExactIn });
     assert!(r.is_err(), "u64::MAX past the cap must surface as Err, not a bad route");
@@ -151,9 +141,7 @@ async fn jupiter_quote_errs_on_would_revert() {
 /// signer) and records the full order to stdout for the Jupiter handoff package.
 #[tokio::test(flavor = "current_thread")]
 async fn golden_account_metas_order() {
-    let Some((amm, _snap, _clock)) = setup() else {
-        return;
-    };
+    let (amm, _snap, _clock) = setup();
     let mints = amm.get_reserve_mints();
     let user = Pubkey::new_unique();
     let sp = SwapParams {

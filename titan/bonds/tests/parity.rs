@@ -115,13 +115,11 @@ fn to_sdk_account(a: &Account) -> solana_sdk::account::Account {
 }
 
 /// A LiteSVM with the forged `reflect_main.so` loaded and every non-program
-/// forged account set; the Clock is warped to the forge meta. `None` (skip)
-/// when the committed program is absent.
-fn load_svm(snap: &Snapshot) -> Option<LiteSVM> {
-    let so = std::fs::read(manifest_rel("tests/fixtures/programs/reflect_main.so")).ok().or_else(|| {
-        eprintln!("[skip] no reflect_main.so - regenerate via reflect-core bond_forge_dump_tests");
-        None
-    })?;
+/// forged account set; the Clock is warped to the forge meta. MANDATORY: a
+/// missing program fixture panics.
+fn load_svm(snap: &Snapshot) -> LiteSVM {
+    let so = std::fs::read(manifest_rel("tests/fixtures/programs/reflect_main.so"))
+        .unwrap_or_else(|_| panic!("no reflect_main.so - regenerate via reflect-core bond_forge_dump_tests; parity fixtures are mandatory"));
     let mut svm = LiteSVM::new();
     svm.add_program(sdk_key(&snap.program_id), &so);
 
@@ -133,7 +131,7 @@ fn load_svm(snap: &Snapshot) -> Option<LiteSVM> {
         let _ = svm.set_account(sdk_key(k), to_sdk_account(acc));
     }
     svm.set_sysvar::<SolanaClock>(&snap.clock);
-    Some(svm)
+    svm
 }
 
 /// Build the venue from the forged controller and `update_state` it off the
@@ -171,7 +169,7 @@ fn assert_direction(venue: &ReflectBondVenue, snap: &Snapshot, in_mint: Pubkey, 
     assert!(quote.expected_output > 0);
 
     let ix = venue.generate_swap_instruction(req, sdk_to_pk(&snap.user.pubkey())).expect("build");
-    let Some(mut svm) = load_svm(snap) else { return };
+    let mut svm = load_svm(snap);
     svm.airdrop(&snap.user.pubkey(), 1_000_000_000).expect("airdrop");
 
     let (src, dst) = (user_ata(&snap.user, &in_mint), user_ata(&snap.user, &out_mint));
@@ -215,9 +213,6 @@ fn assert_direction(venue: &ReflectBondVenue, snap: &Snapshot, in_mint: Pubkey, 
 #[tokio::test(flavor = "current_thread")]
 async fn parity_all_directions_swept() {
     let (venue, snap, receipt, assets) = setup().await;
-    if load_svm(&snap).is_none() {
-        return; // program absent - loader already printed the skip reason
-    }
 
     for amount in [1_000u64, 250_000, 5_000_000] {
         assert_direction(&venue, &snap, assets[0], receipt, amount); // mint

@@ -79,27 +79,21 @@ fn load_snapshot() -> Snapshot {
 /// Wire the Jupiter Amm from the snapshot (cold `from_keyed_account` → `update`
 /// ingests seeds + discovery set from the same map). Returns `(amm, snapshot,
 /// clock, receipt mint, basket asset mints)`; mints() = `[receipt, asset_0..n]`.
-fn setup() -> Option<(ReflectBondsAmm, Snapshot, ClockRef, Pubkey, Vec<Pubkey>)> {
-    if !fixture_path().exists() {
-        eprintln!("[skip] missing forged fixture {} - regenerate via reflect-core bond_forge_dump_tests", fixture_path().display());
-        return None;
-    }
+fn setup() -> (ReflectBondsAmm, Snapshot, ClockRef, Pubkey, Vec<Pubkey>) {
+    assert!(fixture_path().exists(), "missing forged fixture {} - regenerate via reflect-core bond_forge_dump_tests; parity fixtures are mandatory", fixture_path().display());
     let snap = load_snapshot();
     let clock_ref: ClockRef = snap.clock.clone().into();
     let ctx = AmmContext { clock_ref: clock_ref.clone() };
-    let ka = KeyedAccount { key: snap.controller, account: snap.map.get(&snap.controller)?.clone(), params: None };
+    let ka = KeyedAccount { key: snap.controller, account: snap.map.get(&snap.controller).expect("controller in snapshot").clone(), params: None };
 
-    let mut amm = ReflectBondsAmm::from_keyed_account(&ka, &ctx).ok()?;
-    amm.update(&snap.map).ok()?;
+    let mut amm = ReflectBondsAmm::from_keyed_account(&ka, &ctx).expect("from_keyed_account");
+    amm.update(&snap.map).expect("update round 1");
     if amm.get_reserve_mints().len() < 3 {
-        amm.update(&snap.map).ok()?; // re-run after dynamic accounts resolved
+        amm.update(&snap.map).expect("update round 2"); // re-run after dynamic accounts resolved
     }
     let mints = amm.get_reserve_mints();
-    if mints.len() < 3 {
-        eprintln!("[skip] Jupiter amm resolved {} mints, expected receipt + 2 assets", mints.len());
-        return None;
-    }
-    Some((amm, snap, clock_ref, mints[0], mints[1..].to_vec()))
+    assert!(mints.len() >= 3, "Jupiter amm resolved {} mints, expected receipt + 2 assets", mints.len());
+    (amm, snap, clock_ref, mints[0], mints[1..].to_vec())
 }
 
 /// The shared delegate both adapters call, built independently from the same
@@ -123,9 +117,7 @@ fn reflect_clock(clock: &ClockRef) -> ReflectClock {
 /// = on-chain execution via the Titan bonds suite). Every direction kind, swept.
 #[tokio::test(flavor = "current_thread")]
 async fn jupiter_quote_equals_core_venue() {
-    let Some((amm, snap, clock, receipt, assets)) = setup() else {
-        return;
-    };
+    let (amm, snap, clock, receipt, assets) = setup();
     let venue = core_venue(&snap);
     let rc = reflect_clock(&clock);
 
@@ -143,9 +135,7 @@ async fn jupiter_quote_equals_core_venue() {
 /// the Jupiter adapter returns `Err` (no route, not a bad route).
 #[tokio::test(flavor = "current_thread")]
 async fn jupiter_quote_errs_on_would_revert() {
-    let Some((amm, _snap, _clock, receipt, assets)) = setup() else {
-        return;
-    };
+    let (amm, _snap, _clock, receipt, assets) = setup();
     let r = amm.quote(&QuoteParams { amount: u64::MAX, input_mint: receipt, output_mint: assets[0], swap_mode: SwapMode::ExactIn });
     assert!(r.is_err(), "u64::MAX past capacity must surface as Err, not a bad route");
 }
@@ -157,9 +147,7 @@ async fn jupiter_quote_errs_on_would_revert() {
 /// the Jupiter handoff package.
 #[tokio::test(flavor = "current_thread")]
 async fn golden_account_metas_order_per_route() {
-    let Some((amm, snap, _clock, receipt, assets)) = setup() else {
-        return;
-    };
+    let (amm, snap, _clock, receipt, assets) = setup();
     let venue = core_venue(&snap);
     let user = Pubkey::new_unique();
 
