@@ -29,7 +29,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Clock;
-use reflect_sdk::rlp::{decode_asset_mint_and_oracle, ids, pda, pool_discovery_keys, Action, AssetView, CoreError, LiquidityPoolView, OracleRef, PoolAccounts, SettingsView};
+use reflect_sdk::rlp::{ids, pda, pool_discovery_keys_from_state, Action, AssetView, CoreError, LiquidityPoolView, OracleRef, PoolAccounts, SettingsView};
 use reflect_sdk::strategy::MintInfo;
 
 use crate::{spl_mint_info, RouteQuote};
@@ -88,44 +88,23 @@ impl RlpVenue {
     }
 
     /// Given the round-1 bytes (pool, settings, one slice per Asset PDA in
-    /// seed order), the full fetch set. Decode errors SURFACE (each view's
-    /// `from_bytes` validates its own discriminator).
+    /// seed order), the full fetch set - SDK-derived end to end. Decode
+    /// errors SURFACE (each view's `from_bytes` validates its own
+    /// discriminator). No spoof guards here: `from_account_map` re-derives
+    /// every PDA from the decoded state at load, so a wrong market or mint
+    /// fails there naturally.
     ///
     /// # Errors
-    /// Wrong-PDA market; a registered-asset count that no longer matches the
-    /// injected list (admin add/remove since listing - re-scan and re-list);
-    /// an Asset account whose mint differs from the injected mint at that slot.
+    /// Decode failures; a registered-asset count that no longer matches the
+    /// fetched set (admin add/remove since listing - re-scan and re-list).
     pub fn discovery_keys(&self, pool: &[u8], settings: &[u8], assets: &[&[u8]]) -> Result<Vec<Pubkey>> {
-        let pv = LiquidityPoolView::from_bytes(pool).map_err(|e| anyhow!("pool: {e:?}"))?;
-        let index = pv.index().map_err(|e| anyhow!("pool.index: {e:?}"))?;
-        if pda::derive_liquidity_pool(index).0 != self.market {
-            bail!("account is not the canonical liquidity_pool PDA for its index");
-        }
-        let sv = SettingsView::from_bytes(settings).map_err(|e| anyhow!("settings: {e:?}"))?;
-        let registered = sv.assets().map_err(|e| anyhow!("settings.assets: {e:?}"))? as usize;
-        if registered != self.asset_mints.len() {
-            bail!("registered asset count ({registered}) != injected list ({}); re-scan and re-list", self.asset_mints.len());
-        }
-        let lp_token = Pubkey::new_from_array(pv.lp_token().map_err(|e| anyhow!("pool.lp_token: {e:?}"))?);
-        let mut oracle_refs = Vec::with_capacity(assets.len());
-        for (i, bytes) in assets.iter().enumerate() {
-            let (mint, oracle) = decode_asset_mint_and_oracle(bytes).map_err(|e| anyhow!("asset[{i}]: {e:?}"))?;
-            if Pubkey::new_from_array(mint) != self.asset_mints[i] {
-                bail!("asset[{i}] mint mismatch vs injected list");
-            }
-            oracle_refs.push((self.asset_mints[i], oracle));
-        }
-        // pool_discovery_keys = dedup([pool, lp_token] ++ per-asset [vault_ata, oracle]);
-        // its ONLY overlap with the seed set is the pool key itself.
-        let mut keys = self.seeds();
-        keys.extend(pool_discovery_keys(index, lp_token, &oracle_refs).into_iter().filter(|k| *k != self.market));
-        Ok(keys)
+        pool_discovery_keys_from_state(pool, settings, assets).map_err(|e| anyhow!("discovery: {e:?}"))
     }
 
-    /// Ingest the fetched set. The round-2 guards (PDA, count, mint match)
-    /// already ran in [`discovery_keys`](Self::discovery_keys) - both shims
-    /// call it before load - so load only verifies ownership and decodes
-    /// what it caches.
+    /// Ingest the fetched set: verify ownership and decode what it caches.
+    /// The count guard already ran in [`discovery_keys`](Self::discovery_keys)
+    /// (both shims call it before load); a spoofed market or mint fails
+    /// naturally in `from_account_map`'s PDA re-derivation.
     ///
     /// # Errors
     /// If the pool account is missing/not rlp-owned, the settings account is
@@ -406,18 +385,19 @@ mod tests {
     fn discovery_rejects_asset_count_mismatch() {
         let a = pk(10);
         let (pool, lp_token, accounts) = genesis(a, pk(20), pk(11), pk(21), false);
-        let v = RlpVenue::from_market(pool, vec![a]); // only 1 injected, settings says 2
+        let v = RlpVenue::from_market(pool, vec![a]); // 1 asset fetched, settings says 2
         let asset_bytes = [accounts[2].2.as_slice()];
         assert!(v.discovery_keys(&pool_buf(0, &lp_token), &accounts[1].2, &asset_bytes).is_err());
     }
 
     #[test]
-    fn discovery_rejects_wrong_pool_pda() {
+    fn load_rejects_market_not_at_canonical_pda() {
+        // Market key does NOT match derive_liquidity_pool(index) - the
+        // fetched map won't contain the key load looks up.
         let a = pk(10);
-        let (_, lp_token, accounts) = genesis(a, pk(20), pk(11), pk(21), false);
-        let v = RlpVenue::from_market(Pubkey::new_unique(), vec![a, pk(20)]);
-        let asset_bytes = [accounts[2].2.as_slice(), accounts[3].2.as_slice()];
-        assert!(v.discovery_keys(&pool_buf(0, &lp_token), &accounts[1].2, &asset_bytes).is_err());
+        let (_, _, accounts) = genesis(a, pk(20), pk(11), pk(21), false);
+        let mut v = RlpVenue::from_market(Pubkey::new_unique(), vec![a, pk(20)]);
+        assert!(v.load(accounts).is_err());
     }
 
     #[test]

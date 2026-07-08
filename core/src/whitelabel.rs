@@ -7,7 +7,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Clock;
-use reflect_sdk::proxy::{ids, quote_account_keys_from_state, CoreError, ProxyState, WhitelabelAccounts};
+use reflect_sdk::proxy::{ids, whitelabel_discovery_keys, CoreError, ProxyState, WhitelabelAccounts};
 use reflect_sdk::strategy::MintInfo;
 
 use crate::{spl_mint_info, RouteQuote};
@@ -58,20 +58,12 @@ impl WhitelabelVenue {
     }
 
     /// Given the `ProxyState` bytes, the full fetch set: the 4 quote keys
-    /// plus the stablecoin mint account (decimals; extras pass through the
-    /// SDK loader harmlessly).
+    /// plus the stablecoin mint account (decimals) - SDK-derived end to end.
     ///
     /// # Errors
     /// If the bytes are not a valid `ProxyState`.
     pub fn discovery_keys(&self, proxy_state: &[u8]) -> Result<Vec<Pubkey>> {
-        let ps = ProxyState::from_bytes(proxy_state).map_err(|e| anyhow!("proxy_state: {e:?}"))?;
-        let branded = Pubkey::new_from_array(ps.branded_mint());
-        let keys = quote_account_keys_from_state(branded, proxy_state).map_err(|e| anyhow!("keys: {e:?}"))?;
-        let mut all = keys.all_keys(); // [proxy_state, oracle, vault, branded_mint]
-
-        all.push(keys.stablecoin_mint);
-
-        Ok(all)
+        whitelabel_discovery_keys(proxy_state).map_err(|e| anyhow!("discovery: {e:?}"))
     }
 
     /// Ingest the fetched `(key, owner, data)` set: verify ownership, build
