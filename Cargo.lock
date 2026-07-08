@@ -2867,10 +2867,10 @@ dependencies = [
 name = "reflect-jupiter-bonds"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "anyhow",
  "base64 0.22.1",
  "reflect-core-sdk",
+ "reflect-jupiter-common",
  "reflect-routing-core",
  "serde_json",
  "solana-sdk",
@@ -2878,13 +2878,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "reflect-jupiter-lending"
+name = "reflect-jupiter-common"
 version = "0.1.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "serde_json",
+ "solana-sdk",
+]
+
+[[package]]
+name = "reflect-jupiter-lending"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "reflect-core-sdk",
+ "reflect-jupiter-common",
  "reflect-routing-core",
  "serde_json",
  "solana-sdk",
@@ -2895,9 +2905,9 @@ dependencies = [
 name = "reflect-jupiter-rlp"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "anyhow",
  "reflect-core-sdk",
+ "reflect-jupiter-common",
  "reflect-routing-core",
  "serde_json",
  "solana-sdk",
@@ -2908,9 +2918,9 @@ dependencies = [
 name = "reflect-jupiter-whitelabel"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "anyhow",
  "reflect-core-sdk",
+ "reflect-jupiter-common",
  "reflect-routing-core",
  "solana-sdk",
  "tokio",
@@ -2942,9 +2952,9 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "litesvm",
- "log",
  "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-titan-common",
  "serde_json",
  "solana-account",
  "solana-instruction",
@@ -2954,9 +2964,22 @@ dependencies = [
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token 7.0.0",
+ "tokio",
+]
+
+[[package]]
+name = "reflect-titan-common"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "log",
+ "solana-account",
+ "solana-instruction",
+ "solana-pubkey",
+ "spl-associated-token-account",
+ "spl-token 7.0.0",
  "spl-token-2022 9.0.0",
  "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]
@@ -2967,10 +2990,10 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "litesvm",
- "log",
  "rand 0.8.6",
  "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-titan-common",
  "serde_json",
  "solana-account",
  "solana-client",
@@ -2981,8 +3004,6 @@ dependencies = [
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token 7.0.0",
- "spl-token-2022 9.0.0",
- "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -2993,9 +3014,9 @@ dependencies = [
  "async-trait",
  "bincode",
  "litesvm",
- "log",
  "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-titan-common",
  "solana-account",
  "solana-instruction",
  "solana-program",
@@ -3004,8 +3025,6 @@ dependencies = [
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token 7.0.0",
- "spl-token-2022 9.0.0",
- "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -3016,9 +3035,9 @@ dependencies = [
  "async-trait",
  "bincode",
  "litesvm",
- "log",
  "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-titan-common",
  "solana-account",
  "solana-client",
  "solana-instruction",
@@ -3028,8 +3047,6 @@ dependencies = [
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token 7.0.0",
- "spl-token-2022 9.0.0",
- "thiserror 1.0.69",
  "tokio",
 ]
 

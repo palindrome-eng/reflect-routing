@@ -6,10 +6,10 @@ description = "Reflect whitelabel branded pair as a Jupiter Amm, built on reflec
 
 [dependencies]
 reflect-routing-core = { path = "../../core" }
+reflect-jupiter-common = { path = "../common" }
 reflect-sdk = { package = "reflect-core-sdk", path = "../../../reflect-core-sdk" }
 solana-sdk = "2.2"
 anyhow = "1"
-ahash = "0.8"
 
 # parity.rs asserts quote==sdk + the golden account-meta order, built in-process
 # from hand-synthesized ProxyState/Oracle bytes (no forge, no fixture file needed).

@@ -32,7 +32,8 @@ use reflect_routing_core::{RlpRoute, RlpVenue};
 use reflect_sdk::common::Clock as ReflectClock;
 use reflect_sdk::rlp::{ids, pda};
 
-use reflect_jupiter_rlp::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, ReflectRlpAmm, Swap, SwapMode, SwapParams};
+use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
+use reflect_jupiter_rlp::ReflectRlpAmm;
 
 const PYTH_DISC: [u8; 8] = [34, 241, 35, 99, 157, 126, 244, 205];
 const LP_DISC: [u8; 8] = [66, 38, 17, 64, 188, 80, 68, 129];

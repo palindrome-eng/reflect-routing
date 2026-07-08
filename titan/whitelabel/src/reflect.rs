@@ -14,8 +14,8 @@ use reflect_sdk::common::Clock;
 
 use reflect_routing_core::{MintInfo, WhitelabelVenue};
 
-use crate::account_caching::AccountsCache;
-use crate::trading_venue::{
+use reflect_titan_common::account_caching::AccountsCache;
+use reflect_titan_common::trading_venue::{
     error::TradingVenueError, protocol::PoolProtocol, token_info::TokenInfo, AddressLookupTableTrait, FromAccount, QuoteRequest, QuoteResult, TradingVenue,
 };
 
@@ -186,7 +186,8 @@ mod tests {
         assert!(v.get_token_info().is_empty());
         assert_eq!(v.get_required_pubkeys_for_update().unwrap().len(), 1); // the single seed
 
-        let req = QuoteRequest { input_mint: Pubkey::new_unique(), output_mint: Pubkey::new_unique(), amount: 1, swap_type: crate::trading_venue::SwapType::ExactIn };
+        let req =
+            QuoteRequest { input_mint: Pubkey::new_unique(), output_mint: Pubkey::new_unique(), amount: 1, swap_type: reflect_titan_common::trading_venue::SwapType::ExactIn };
         assert!(matches!(v.quote(req).unwrap_err(), TradingVenueError::NotInitialized(_)));
     }
 }

@@ -37,8 +37,8 @@ use solana_sdk::transaction::Transaction;
 
 use reflect_sdk::common::ids::{TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
 
-use reflect_titan_lending::account_caching::{AccountCacheError, AccountsCache};
-use reflect_titan_lending::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
+use reflect_titan_common::account_caching::{AccountCacheError, AccountsCache};
+use reflect_titan_common::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
 use reflect_titan_lending::ReflectLendingVenue;
 
 // Owners of the cloned Kamino state in the snapshot; their `.so`s live under

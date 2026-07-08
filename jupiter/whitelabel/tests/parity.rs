@@ -28,7 +28,8 @@ use reflect_routing_core::{WhitelabelRoute, WhitelabelVenue};
 use reflect_sdk::common::Clock as ReflectClock;
 use reflect_sdk::proxy::{ids, pda};
 
-use reflect_jupiter_whitelabel::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, ReflectWhitelabelAmm, Swap, SwapMode, SwapParams};
+use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
+use reflect_jupiter_whitelabel::ReflectWhitelabelAmm;
 
 const ORACLE_SLOT: u64 = 500;
 const ORACLE_PRICE: u64 = 1_000_000_000_000; // $1.00, precision 12
@@ -102,7 +103,7 @@ fn build_fixture() -> Fixture {
 fn setup(fx: &Fixture) -> (ReflectWhitelabelAmm, ClockRef) {
     let clock_ref: ClockRef = fx.clock.clone().into();
     let ctx = AmmContext { clock_ref: clock_ref.clone() };
-    let ka = KeyedAccount { key: fx.proxy_state, account: fx.map.get(&fx.proxy_state).unwrap().clone() };
+    let ka = KeyedAccount { key: fx.proxy_state, account: fx.map.get(&fx.proxy_state).unwrap().clone(), params: None };
 
     let mut amm = ReflectWhitelabelAmm::from_keyed_account(&ka, &ctx).expect("from_keyed_account");
     amm.update(&fx.map).expect("update round 1");

@@ -42,8 +42,8 @@ use solana_sdk::transaction::Transaction;
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
 use reflect_sdk::proxy::{ids, pda};
 
-use reflect_titan_whitelabel::account_caching::{AccountCacheError, AccountsCache};
-use reflect_titan_whitelabel::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
+use reflect_titan_common::account_caching::{AccountCacheError, AccountsCache};
+use reflect_titan_common::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
 use reflect_titan_whitelabel::ReflectWhitelabelVenue;
 
 fn manifest_rel(rel: &str) -> PathBuf {

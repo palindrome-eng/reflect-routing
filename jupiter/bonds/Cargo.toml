@@ -6,11 +6,10 @@ description = "Reflect bond basket strategy as a Jupiter Amm, built on reflect-s
 
 [dependencies]
 reflect-routing-core = { path = "../../core" }
+reflect-jupiter-common = { path = "../common" }
 reflect-sdk = { package = "reflect-core-sdk", path = "../../../reflect-core-sdk" }
 solana-sdk = "2.2"
 anyhow = "1"
-ahash = "0.8"
-
 
 [dev-dependencies]
 serde_json = "1"
