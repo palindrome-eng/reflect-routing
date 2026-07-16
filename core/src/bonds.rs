@@ -143,8 +143,7 @@ impl BondVenue {
         let route = accts.bond_route(input_mint, output_mint).map_err(|e| anyhow!("route: {e:?}"))?;
         let h = accts.bonds(user).map_err(|e| anyhow!("bonds: {e:?}"))?;
         let (_q, built) = match route {
-            // usd_value = 0 is the on-chain "spend exactly the transfers" sentinel: ExactIn.
-            BondRoute::Mint { in_asset_id } => h.mint(0, &[TokenInput { asset_id: in_asset_id, amount }], slippage_bps, clock).map_err(|e| anyhow!("mint: {e:?}"))?,
+            BondRoute::Mint { in_asset_id } => h.mint_exact_in(&[TokenInput { asset_id: in_asset_id, amount }], slippage_bps, clock).map_err(|e| anyhow!("mint: {e:?}"))?,
             BondRoute::Swap { in_asset_id, out_asset_id } => h.swap(in_asset_id, amount, out_asset_id, slippage_bps, clock).map_err(|e| anyhow!("swap: {e:?}"))?,
             // Ceiling, not a target: u64::MAX never over-allocates (the
             // allocator clamps to pool value in checked u128 math).
