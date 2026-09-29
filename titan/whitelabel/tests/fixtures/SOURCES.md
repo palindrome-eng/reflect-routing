@@ -7,4 +7,4 @@ Program binaries dumped from mainnet (program-data account, header stripped).
 
 `snapshots/proxy_prod.json` holds one prod market over a 98 B Pyth asset (slot 451,286,499); `snapshots/proxy_staging.json` one staging market over a 259 B two-leg Pyth asset (slot 451,662,341). Each carries the slot and timestamp it was read at.
 
-`drift.rs` probes the gates the audit fixes added to the staging build; its tests are ignored until the SDK models them.
+`drift.rs` proves the gates the audit fixes added to the staging build (staleness in seconds, undercollateralised wrap, commission-adjusted pricing), from both sides.

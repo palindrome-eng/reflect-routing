@@ -84,7 +84,6 @@ fn exec(svm: &mut LiteSVM, ix: solana_sdk::instruction::Instruction, user: &Keyp
 /// Pyth legs with stored `max_staleness = 1500`: the venue's model vs the program's, by slot
 /// age and by publish-time age.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "SDK v0.11.0 models the pre-audit staging build; re-enable after the protocol-core sync"]
 async fn staleness_boundaries() {
     let mut disagreements = vec![];
     for (dslot, dsec) in [(1_499u64, 0i64), (1_500, 0), (1_501, 0), (2_999, 0), (3_000, 0), (3_001, 0), (0, 599), (0, 600), (0, 601), (0, 1_500), (0, 1_501)] {
@@ -115,7 +114,6 @@ async fn staleness_boundaries() {
 
 /// Vault worth less than principal: the program refuses the wrap; does the venue?
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "SDK v0.11.0 models the pre-audit staging build; re-enable after the protocol-core sync"]
 async fn undercollateralised_wrap() {
     let mut fx = boot();
     let user = fx.user();
@@ -138,7 +136,6 @@ async fn undercollateralised_wrap() {
 /// Commission larger than the vault's excess over principal: the program prices wrap and unwrap
 /// against min(principal, vault value - commission).
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "SDK v0.11.0 models the pre-audit staging build; re-enable after the protocol-core sync"]
 async fn commission_adjusted_pricing() {
     let mut rows = vec![];
     for dir in ["wrap", "unwrap"] {

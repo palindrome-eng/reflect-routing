@@ -24,7 +24,6 @@ fn fixtures() -> PathBuf {
 const NOW: Clock = Clock { slot: 500_000, epoch_start_timestamp: 0, epoch: 0, leader_schedule_epoch: 0, unix_timestamp: 1_800_000_000 };
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "SDK v0.11.0 lacks the PoolWipedOut deposit gate; re-enable after the protocol-core sync"]
 async fn slash_wiped_pool_refuses_deposits() {
     let mut svm = litesvm::LiteSVM::new();
     svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_stacking"));
@@ -72,7 +71,7 @@ async fn slash_wiped_pool_refuses_deposits() {
             3_600,
             None,
             &[0],
-            &Pubkey::new_unique(),
+            None,
             pid,
         ),
         &admin,

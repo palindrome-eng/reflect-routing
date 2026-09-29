@@ -194,10 +194,6 @@ fn leg(oracle: Pubkey, feed_id: [u8; 32], provider: OracleProvider, inverse: boo
 /// both assets with banded chains, initialize the pool listing both, create both
 /// reserves, open Deposit and Swap to the public, then seed both reserves with
 /// genesis deposits built by the venue (each one a parity check of its own).
-///
-/// The SDK's `initialize_lp` sends `protected_vault` as a bare pubkey while this
-/// build reads an `Option<Pubkey>`; `Pubkey::new_unique()` starts with a zero
-/// byte, which the program takes as the `None` tag.
 async fn boot_stacking() -> Stacking {
     let mut svm = LiteSVM::new();
     svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_stacking"));
@@ -258,7 +254,7 @@ async fn boot_stacking() -> Stacking {
         3_600,
         None,
         &[0, 1],
-        &Pubkey::new_unique(),
+        None,
         pid,
     );
     send(&mut svm, "initialize_lp", ix, &admin);

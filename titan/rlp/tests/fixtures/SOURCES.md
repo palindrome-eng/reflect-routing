@@ -7,6 +7,4 @@ Program binaries: one dumped from mainnet (program-data account, header stripped
 
 `snapshots/rlp_prod.json` holds the mainnet accounts of pool 4 (settings, pool, LP mint, the migrated 266 B asset, mint, oracle, vault) at slot 451,683,280.
 
-The branch does not carry 85a6eaf (`initialize_lp` takes `Option<Pubkey>` for `protected_vault`); the SDK builder sends a bare pubkey, which the program reads as the `None` tag when its first byte is zero. The bootstrap here relies on that.
-
-`drift.rs` probes the `PoolWipedOut` deposit gate the stacking build added; its test is ignored until the SDK models it.
+`drift.rs` proves the `PoolWipedOut` deposit gate the stacking build added, from both sides.
