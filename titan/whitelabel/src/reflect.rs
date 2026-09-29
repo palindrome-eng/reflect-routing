@@ -1,8 +1,8 @@
 //! The Reflect whitelabel branded pair as a Titan [`TradingVenue`].
 //!
 //! [`ReflectWhitelabelVenue`] maps [`WhitelabelVenue`] onto Titan's contract
-//! (async two-phase fetch via [`AccountsCache`], a fetched Clock, a full
-//! min_out-baked instruction).
+//! (async three-phase fetch via [`AccountsCache`] - state, asset, legs - a
+//! fetched Clock, a full min_out-baked instruction).
 
 use async_trait::async_trait;
 use solana_account::Account;
@@ -50,10 +50,10 @@ pub struct ReflectWhitelabelVenue {
 }
 
 impl FromAccount for ReflectWhitelabelVenue {
-    fn from_account(pubkey: &Pubkey, _account: &Account) -> Result<Self, TradingVenueError> {
-        // No owner param: this product is single-deployment
-        // (`WhitelabelVenue::load` verifies the account is proxy-owned).
-        let venue = WhitelabelVenue::from_market(*pubkey);
+    fn from_account(pubkey: &Pubkey, account: &Account) -> Result<Self, TradingVenueError> {
+        // The listed account's owner selects the deployment (mainnet or
+        // staging proxy); `WhitelabelVenue::load` re-checks it.
+        let venue = WhitelabelVenue::from_market(account.owner, *pubkey);
         let keys = venue.seeds();
         Ok(Self { venue, clock: Clock { slot: 0, unix: 0 }, keys, tokens: vec![], loaded: false })
     }
@@ -98,9 +98,12 @@ impl TradingVenue for ReflectWhitelabelVenue {
         let clock_acc = base[1].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(CLOCK_SYSVAR.into()))?;
         self.clock = Clock::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
 
-        // the venue derives the full set from the ProxyState bytes; fetch it
-        // and hand it back for loading.
-        let keys = self.venue.discovery_keys(&market.data).map_err(venue_err)?;
+        // Round 2: the Asset the state names carries the oracle leg keys.
+        let asset_key = self.venue.asset_key(&market.data).map_err(venue_err)?;
+        let asset = cache.get_account(&asset_key).await?.ok_or_else(|| TradingVenueError::NoAccountFound(asset_key.into()))?;
+
+        // Round 3: the full set, handed back for loading.
+        let keys = self.venue.discovery_keys(&market.data, &asset.data).map_err(venue_err)?;
         let datas = cache.get_accounts(&keys).await?;
         self.venue.load(keys.iter().zip(datas).filter_map(|(k, a)| a.map(|a| (*k, a.owner, a.data)))).map_err(venue_err)?;
 

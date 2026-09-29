@@ -4,8 +4,8 @@
 //! The vendored `Amm` trait + `Swap` tag live in `reflect-jupiter-common`,
 //! shared by every `jupiter/<product>` crate. This crate is a thin shim:
 //! [`ReflectWhitelabelAmm`] maps [`WhitelabelVenue`] onto Jupiter's contract
-//! (a 1-seed two-phase account handshake, atomic clock, metas-only swap
-//! build). All routing/protocol logic lives in `reflect-routing-core` +
+//! (a 1-seed three-phase account handshake - state, asset, legs - atomic
+//! clock, metas-only swap build). All routing/protocol logic lives in `reflect-routing-core` +
 //! `reflect-sdk`.
 
 use std::sync::atomic::Ordering;
@@ -18,12 +18,14 @@ use reflect_routing_core::{WhitelabelRoute, WhitelabelVenue};
 use reflect_sdk::common::Clock as ReflectClock;
 
 /// [`WhitelabelVenue`] presented as a Jupiter market. One seed account (the
-/// `ProxyState` itself carries both mints), unlike lending's 2 / bonds' 4.
+/// `ProxyState` itself carries both mints); its `Asset` names the oracle
+/// legs, so the handshake takes one more round than lending's.
 #[derive(Clone)]
 pub struct ReflectWhitelabelAmm {
     venue: WhitelabelVenue,
     clock_ref: ClockRef,
     market_data: Option<Vec<u8>>,
+    asset_data: Option<Vec<u8>>,
 }
 
 impl ReflectWhitelabelAmm {
@@ -34,9 +36,9 @@ impl ReflectWhitelabelAmm {
 
 impl Amm for ReflectWhitelabelAmm {
     fn from_keyed_account(ka: &KeyedAccount, ctx: &AmmContext) -> Result<Self> {
-        // No owner param to from_market: single-deployment, `venue.load`
-        // verifies the account is proxy-owned.
-        Ok(Self { venue: WhitelabelVenue::from_market(ka.key), clock_ref: ctx.clock_ref.clone(), market_data: Some(ka.account.data.clone()) })
+        // The listed account's owner selects the deployment (mainnet or
+        // staging proxy); `venue.load` re-checks it against the fetched bytes.
+        Ok(Self { venue: WhitelabelVenue::from_market(ka.account.owner, ka.key), clock_ref: ctx.clock_ref.clone(), market_data: Some(ka.account.data.clone()), asset_data: None })
     }
 
     fn label(&self) -> String {
@@ -63,14 +65,15 @@ impl Amm for ReflectWhitelabelAmm {
         true // cold start returns the seed; re-called after update for the full set
     }
 
-    /// Two-phase handshake: cold returns the seed; once `update` has cached
-    /// its bytes, the venue derives the full set. On derive failure fall
-    /// back to the seed (re-cold) rather than panic.
+    /// Three-phase handshake: cold returns the seed; with the state bytes
+    /// cached, the seed plus its `Asset`; with both cached, the full set. On
+    /// derive failure fall back a round rather than panic.
     fn get_accounts_to_update(&self) -> Vec<Pubkey> {
         let seeds = self.venue.seeds();
-        match &self.market_data {
-            Some(m) => self.venue.discovery_keys(m).unwrap_or_else(|_| seeds.clone()),
-            None => seeds, // cold: [market]
+        match (&self.market_data, &self.asset_data) {
+            (Some(market), Some(asset)) => self.venue.discovery_keys(market, asset).unwrap_or_else(|_| seeds.clone()),
+            (Some(market), None) => self.venue.asset_key(market).map_or_else(|_| seeds.clone(), |a| vec![seeds[0], a]),
+            (None, _) => seeds, // cold: [market]
         }
     }
 
@@ -81,9 +84,13 @@ impl Amm for ReflectWhitelabelAmm {
         let Some(market) = &self.market_data else {
             return Ok(()); // cold: seed not in the map yet
         };
-
         // A present-but-undecodable seed is an error, not "still cold".
-        let keys = self.venue.discovery_keys(market)?;
+        self.asset_data = m.get(&self.venue.asset_key(market)?).map(|a| a.data.clone());
+        let Some(asset) = &self.asset_data else {
+            return Ok(()); // round 2 pending: the asset is not in the map yet
+        };
+
+        let keys = self.venue.discovery_keys(market, asset)?;
         self.venue.load(keys.iter().filter_map(|k| m.get(k).map(|a| (*k, a.owner, a.data.clone()))))
     }
 

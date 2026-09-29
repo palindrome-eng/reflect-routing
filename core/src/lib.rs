@@ -18,7 +18,7 @@ use reflect_sdk::common::Clock;
 use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
 
 pub use bonds::BondVenue;
-pub use reflect_sdk::strategy::{BondMints, BondRoute, MintInfo};
+pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
 pub use rlp::{RlpRoute, RlpVenue};
 pub use whitelabel::{WhitelabelRoute, WhitelabelVenue};
 
@@ -33,7 +33,7 @@ pub(crate) fn spl_mint_info(mint: Pubkey, fetched: &[(Pubkey, Pubkey, Vec<u8>)])
 pub struct RouteQuote {
     /// Integer atom output of the counterpart mint.
     pub amount_out: u64,
-    /// Input-denominated fee (Jupiter surfaces it; Titan ignores it).
+    /// Fee the venue reports; each venue documents its mint (lending: input; rlp swap: output).
     pub fee: u64,
 }
 

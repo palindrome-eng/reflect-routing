@@ -7,14 +7,15 @@ description = "Reflect rlp insurance pool as a Jupiter Amm, built on reflect-sdk
 [dependencies]
 reflect-routing-core = { path = "../../core" }
 reflect-jupiter-common = { path = "../common" }
-reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git" }
+reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git", tag = "v0.11.0" }
 solana-sdk = "2.2"
 anyhow = "1"
 # parses KeyedAccount.params (asset-mint set injected at listing time -
 # Settings stores only a count, not the mints - see RlpVenue docs).
 serde_json = "1"
 
-# parity.rs asserts quote==sdk + the golden account-meta order, built
-# in-process from hand-synthesized rlp state (no forge, no fixture file needed).
+# parity.rs asserts quote==core venue + the golden account-meta order over the
+# mainnet snapshot committed with the Titan rlp suite (no SVM needed).
 [dev-dependencies]
+base64 = "0.22"
 tokio = { version = "1", features = ["rt", "macros"] }

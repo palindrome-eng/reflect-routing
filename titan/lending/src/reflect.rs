@@ -12,7 +12,6 @@ use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::{TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
 use reflect_sdk::common::Clock;
-use reflect_sdk::strategy::ids::POOL_REGISTRY_LOOKUP_TABLE;
 
 use reflect_routing_core::{LendingVenue, MintInfo};
 
@@ -159,7 +158,8 @@ impl TradingVenue for ReflectLendingVenue {
 #[async_trait]
 impl AddressLookupTableTrait for ReflectLendingVenue {
     async fn get_lookup_table_keys(&self, _accounts_cache: Option<&dyn AccountsCache>) -> Result<Vec<Pubkey>, TradingVenueError> {
-        Ok(vec![POOL_REGISTRY_LOOKUP_TABLE])
+        // No lending lookup table published for the RFLcttrN deployment.
+        Ok(vec![])
     }
 }
 

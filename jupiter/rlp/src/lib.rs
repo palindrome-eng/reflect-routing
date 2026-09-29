@@ -3,9 +3,9 @@
 //! The vendored `Amm` trait + `Swap` tag live in `reflect-jupiter-common`,
 //! which also carries `KeyedAccount.params` (per-market config Jupiter
 //! supplies at listing). For rlp markets that is
-//! `{"asset_mints": ["<base58>", ...]}`, the registered set from the
-//! lister's gPA scan (`Settings` stores only a count on-chain, never the
-//! mints; see [`RlpVenue`] docs). This crate is a thin shim:
+//! `{"asset_mints": ["<base58>", ...]}`, the pool's asset mints (the pool
+//! lists registry indices and the `Asset` PDA is keyed by mint; see
+//! [`RlpVenue`] docs). This crate is a thin shim:
 //! [`ReflectRlpAmm`] maps [`RlpVenue`] onto Jupiter's contract (a
 //! runtime-sized two-phase account handshake, atomic clock, metas-only swap
 //! build). All routing/protocol logic lives in `reflect-routing-core` +
@@ -21,8 +21,8 @@ use reflect_routing_core::{RlpRoute, RlpVenue};
 use reflect_sdk::common::Clock as ReflectClock;
 
 /// [`RlpVenue`] presented as a Jupiter market. The seed count scales with the
-/// registered asset count (2 + 2N: pool, settings, N asset PDAs, N mints), so
-/// the cached seed bytes are a runtime-sized `Vec`, not a fixed array.
+/// pool's asset count (2 + N: pool, settings, N asset PDAs), so the cached
+/// seed bytes are a runtime-sized `Vec`, not a fixed array.
 #[derive(Clone)]
 pub struct ReflectRlpAmm {
     venue: RlpVenue,
@@ -38,8 +38,8 @@ impl ReflectRlpAmm {
 
 impl Amm for ReflectRlpAmm {
     fn from_keyed_account(ka: &KeyedAccount, ctx: &AmmContext) -> Result<Self> {
-        // No owner check here (lending/bonds/whitelabel have none either):
-        // RlpVenue::load errors unless the pool is rlp-program-owned.
+        // The listed account's owner selects the deployment (mainnet or
+        // staging rlp); RlpVenue::load re-checks it against the fetched bytes.
         let mints: Vec<Pubkey> = ka
             .params
             .as_ref()
@@ -49,7 +49,7 @@ impl Amm for ReflectRlpAmm {
             .iter()
             .map(|v| -> Result<Pubkey> { Ok(v.as_str().context("asset mint must be a base58 string")?.parse()?) })
             .collect::<Result<_>>()?;
-        let venue = RlpVenue::from_market(ka.key, mints);
+        let venue = RlpVenue::from_market(ka.account.owner, ka.key, mints);
         let seed_data = vec![None; venue.seeds().len()];
         Ok(Self { venue, clock_ref: ctx.clock_ref.clone(), seed_data })
     }
@@ -85,18 +85,16 @@ impl Amm for ReflectRlpAmm {
     /// back to the seeds (re-cold) rather than panic.
     fn get_accounts_to_update(&self) -> Vec<Pubkey> {
         let seeds = self.venue.seeds();
-        let n = self.venue.asset_mints().len();
         if self.seed_data.iter().all(Option::is_some) {
-            let asset_bytes: Vec<&[u8]> = self.seed_data[2..2 + n].iter().map(|d| d.as_deref().unwrap()).collect();
-            self.venue.discovery_keys(self.seed_data[0].as_deref().unwrap(), self.seed_data[1].as_deref().unwrap(), &asset_bytes).unwrap_or_else(|_| seeds.clone())
+            let asset_bytes: Vec<&[u8]> = self.seed_data[2..].iter().map(|d| d.as_deref().unwrap()).collect();
+            self.venue.discovery_keys(self.seed_data[0].as_deref().unwrap(), &asset_bytes).unwrap_or_else(|_| seeds.clone())
         } else {
-            seeds // cold: [pool, settings, asset_pda_0..n-1, mint_0..n-1]
+            seeds // cold: [pool, settings, asset_pda_0..n-1]
         }
     }
 
     fn update(&mut self, m: &AccountMap) -> Result<()> {
         let seeds = self.venue.seeds();
-        let n = self.venue.asset_mints().len();
 
         for (slot, seed) in self.seed_data.iter_mut().zip(&seeds) {
             *slot = m.get(seed).map(|a| a.data.clone());
@@ -106,17 +104,16 @@ impl Amm for ReflectRlpAmm {
         }
 
         // A present-but-undecodable seed is an error, not "still cold".
-        let asset_bytes: Vec<&[u8]> = self.seed_data[2..2 + n].iter().map(|d| d.as_deref().unwrap()).collect();
-        let keys = self.venue.discovery_keys(self.seed_data[0].as_deref().unwrap(), self.seed_data[1].as_deref().unwrap(), &asset_bytes)?;
+        let asset_bytes: Vec<&[u8]> = self.seed_data[2..].iter().map(|d| d.as_deref().unwrap()).collect();
+        let keys = self.venue.discovery_keys(self.seed_data[0].as_deref().unwrap(), &asset_bytes)?;
         self.venue.load(keys.iter().filter_map(|k| m.get(k).map(|a| (*k, a.owner, a.data.clone()))))
     }
 
     fn quote(&self, p: &QuoteParams) -> Result<Quote> {
         match self.venue.quote(p.input_mint, p.output_mint, p.amount, self.clock())? {
-            // Restake charges no fee; swap is at the raw oracle cross-rate
-            // with no fee - a wrong-unit fee would mislead Jupiter's router
-            // more than zero.
-            Some(q) => Ok(Quote { in_amount: p.amount, out_amount: q.amount_out, fee_amount: 0, fee_mint: p.input_mint }),
+            // The swap fee is taken from the OUTPUT (`swap_fee_bps` after price
+            // impact); deposits charge none.
+            Some(q) => Ok(Quote { in_amount: p.amount, out_amount: q.amount_out, fee_amount: q.fee, fee_mint: p.output_mint }),
             None => bail!("reflect would revert: no route > bad route"),
         }
     }
@@ -128,7 +125,7 @@ impl Amm for ReflectRlpAmm {
         let route = self.venue.route(sp.source_mint, sp.destination_mint)?;
         let ix = self.venue.build(sp.token_transfer_authority, sp.source_mint, sp.destination_mint, sp.in_amount, 0, self.clock())?;
         let swap = match route {
-            RlpRoute::Restake => Swap::ReflectRlpRestake,
+            RlpRoute::Deposit => Swap::ReflectRlpDeposit,
             RlpRoute::Swap => Swap::ReflectRlpSwap,
         };
         Ok(SwapAndAccountMetas { swap, account_metas: ix.accounts })
@@ -167,7 +164,7 @@ mod tests {
         let params = serde_json::json!({ "asset_mints": [a.to_string(), b.to_string()] });
         let amm = ReflectRlpAmm::from_keyed_account(&keyed_with_params(Some(params)), &ctx).expect("from_keyed_account");
         assert_eq!(amm.venue.asset_mints(), &[a, b]);
-        assert_eq!(amm.get_accounts_to_update().len(), 6); // pool + settings + 2 asset pdas + 2 mints
+        assert_eq!(amm.get_accounts_to_update().len(), 4); // pool + settings + 2 asset pdas
     }
 
     // A cold Amm exposes no reserve mints, advertises its dynamic-account

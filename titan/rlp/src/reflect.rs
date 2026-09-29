@@ -34,7 +34,7 @@ fn venue_err<E: core::fmt::Debug>(e: E) -> TradingVenueError {
 }
 
 /// [`MintInfo`] → Titan `TokenInfo` (note `u8` → `i32` decimals). This
-/// product is SPL-only (rlp's restake/swap CPI only into the classic SPL
+/// product is SPL-only (rlp's deposit/swap CPI only into the classic SPL
 /// Token program).
 fn to_token_info(m: MintInfo) -> TokenInfo {
     TokenInfo { pubkey: m.pubkey, decimals: m.decimals as i32, is_token_2022: false, transfer_fee: None, maximum_fee: None }
@@ -53,13 +53,13 @@ pub struct ReflectRlpVenue {
 }
 
 impl ReflectRlpVenue {
-    /// The integration entry point: Titan's registry supplies the market key
-    /// AND the registered asset mints (see [`RlpVenue`] docs for the
-    /// one-call gPA recipe - `Settings` stores only an asset COUNT, never
-    /// the mints, so they cannot be discovered from the pool account alone).
-    /// No owner check here - `RlpVenue::load` enforces ownership.
-    pub fn new(pool: Pubkey, asset_mints: Vec<Pubkey>) -> Self {
-        let venue = RlpVenue::from_market(pool, asset_mints);
+    /// The integration entry point: Titan's registry supplies the rlp
+    /// deployment (`program_id`), the market key AND the pool's asset mints
+    /// (the pool lists registry indices; the `Asset` PDA is keyed by mint, so
+    /// they cannot be discovered from the pool account alone).
+    /// `RlpVenue::load` enforces ownership.
+    pub fn new(program_id: Pubkey, pool: Pubkey, asset_mints: Vec<Pubkey>) -> Self {
+        let venue = RlpVenue::from_market(program_id, pool, asset_mints);
         let keys = venue.seeds();
         Self { venue, clock: Clock { slot: 0, unix: 0 }, keys, tokens: vec![], loaded: false }
     }
@@ -103,7 +103,7 @@ impl TradingVenue for ReflectRlpVenue {
 
     async fn update_state(&mut self, cache: &dyn AccountsCache) -> Result<(), TradingVenueError> {
         // Round 1: seeds + clock, one batch. Seed order is the venue
-        // contract: [pool, settings, asset_pda_0..n-1, mint_0..n-1].
+        // contract: [pool, settings, asset_pda_0..n-1].
         let seeds = self.venue.seeds();
         let mut p1 = seeds.clone();
         p1.push(CLOCK_SYSVAR);
@@ -115,10 +115,10 @@ impl TradingVenue for ReflectRlpVenue {
         let clock_acc = accs.pop().expect("clock pushed above");
         self.clock = Clock::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
 
-        // Round 2: the Asset PDA bytes sit at seed slots 2..2+n.
-        let n = self.venue.asset_mints().len();
-        let asset_bytes: Vec<&[u8]> = accs[2..2 + n].iter().map(|a| a.data.as_slice()).collect();
-        let keys = self.venue.discovery_keys(&accs[0].data, &accs[1].data, &asset_bytes).map_err(venue_err)?;
+        // Round 2: the Asset PDA bytes sit at seed slots 2.., and name the
+        // oracle leg accounts.
+        let asset_bytes: Vec<&[u8]> = accs[2..].iter().map(|a| a.data.as_slice()).collect();
+        let keys = self.venue.discovery_keys(&accs[0].data, &asset_bytes).map_err(venue_err)?;
         let datas = cache.get_accounts(&keys).await?;
 
         // Round 3: load (missing non-seed accounts tolerated by filter_map;
@@ -140,8 +140,8 @@ impl TradingVenue for ReflectRlpVenue {
             return Err(TradingVenueError::NotInitialized(self.venue.market().into()));
         }
         // Zero input → clean 0 (never panics). A predicted revert (killswitch,
-        // stale oracle, insufficient swap inventory) or any quote error maps
-        // to no-liquidity - exactly what bounds() and not_enough_liquidity expect.
+        // role, stale oracle, cap, swap inventory) or any quote error maps to
+        // no-liquidity - exactly what bounds() and not_enough_liquidity expect.
         let expected_output = match self.venue.quote(request.input_mint, request.output_mint, request.amount, self.clock) {
             Ok(Some(q)) => q.amount_out,
             _ => 0,
@@ -199,11 +199,11 @@ mod tests {
     // needs loaded state errors NotInitialized rather than panicking.
     #[test]
     fn cold_venue_is_uninitialized_and_quote_errors() {
-        let v = ReflectRlpVenue::new(Pubkey::new_unique(), vec![Pubkey::new_unique(), Pubkey::new_unique()]);
+        let v = ReflectRlpVenue::new(reflect_sdk::rlp::ids::RLP_PROGRAM, Pubkey::new_unique(), vec![Pubkey::new_unique(), Pubkey::new_unique()]);
 
         assert!(!v.initialized());
         assert!(v.get_token_info().is_empty());
-        assert_eq!(v.get_required_pubkeys_for_update().unwrap().len(), 6); // pool + settings + 2 asset pdas + 2 mints
+        assert_eq!(v.get_required_pubkeys_for_update().unwrap().len(), 4); // pool + settings + 2 asset pdas
 
         let req =
             QuoteRequest { input_mint: Pubkey::new_unique(), output_mint: Pubkey::new_unique(), amount: 1, swap_type: reflect_titan_common::trading_venue::SwapType::ExactIn };

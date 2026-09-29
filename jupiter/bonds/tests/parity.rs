@@ -26,7 +26,7 @@ use solana_sdk::account::Account;
 use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::pubkey::Pubkey;
 
-use reflect_routing_core::{BondRoute, BondVenue};
+use reflect_routing_core::{BondVenue, IndexRoute};
 use reflect_sdk::common::Clock as ReflectClock;
 
 use reflect_jupiter_bonds::ReflectBondsAmm;
@@ -169,9 +169,9 @@ async fn golden_account_metas_order_per_route() {
 
         let route = venue.route(in_mint, out_mint).expect("route");
         let expected_tag = match route {
-            BondRoute::Mint { .. } => Swap::ReflectBondsMint,
-            BondRoute::Swap { .. } => Swap::ReflectBondsSwap,
-            BondRoute::RedeemByReceipt { .. } => Swap::ReflectBondsRedeem,
+            IndexRoute::Mint { .. } => Swap::ReflectBondsMint,
+            IndexRoute::Swap { .. } => Swap::ReflectBondsSwap,
+            IndexRoute::RedeemByReceipt { .. } => Swap::ReflectBondsRedeem,
         };
         assert_eq!(sam.swap, expected_tag, "route→tag mapping for {in_mint}->{out_mint}");
         assert!(!sam.account_metas.is_empty(), "metas must not be empty");

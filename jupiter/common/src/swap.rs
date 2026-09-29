@@ -183,8 +183,8 @@ pub enum Swap {
     ReflectProxyUnwrap,
 
     // PENDING Jupiter-side assignment (cross-org): Jupiter's closed program
-    // must mint real tags for restake / swap. Discriminants are NOT
+    // must mint real tags for deposit / swap. Discriminants are NOT
     // wire-stable - do not serialize across the handoff boundary.
-    ReflectRlpRestake,
+    ReflectRlpDeposit,
     ReflectRlpSwap,
 }

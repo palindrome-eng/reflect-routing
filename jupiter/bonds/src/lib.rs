@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 use solana_sdk::pubkey::Pubkey;
 
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, Quote, QuoteParams, Swap, SwapAndAccountMetas, SwapParams};
-use reflect_routing_core::{BondRoute, BondVenue};
+use reflect_routing_core::{BondVenue, IndexRoute};
 use reflect_sdk::common::Clock as ReflectClock;
 
 /// [`BondVenue`] presented as a Jupiter market. Bonds need 4 seed accounts
@@ -109,9 +109,9 @@ impl Amm for ReflectBondsAmm {
         // handler reads the direction from the resolved account ORDER once
         // real tags land.
         let swap = match route {
-            BondRoute::Mint { .. } => Swap::ReflectBondsMint,
-            BondRoute::Swap { .. } => Swap::ReflectBondsSwap,
-            BondRoute::RedeemByReceipt { .. } => Swap::ReflectBondsRedeem,
+            IndexRoute::Mint { .. } => Swap::ReflectBondsMint,
+            IndexRoute::Swap { .. } => Swap::ReflectBondsSwap,
+            IndexRoute::RedeemByReceipt { .. } => Swap::ReflectBondsRedeem,
         };
         Ok(SwapAndAccountMetas { swap, account_metas: ix.accounts })
     }

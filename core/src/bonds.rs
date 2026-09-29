@@ -1,6 +1,6 @@
 //! Reflect **bonds** routing: the account plumbing + SDK delegation shared by
 //! the Jupiter and Titan shims. The SDK owns all protocol math, including the
-//! mint-pair → operation classification ([`BondRoute`]); [`BondVenue`] is
+//! mint-pair → operation classification ([`IndexRoute`]); [`BondVenue`] is
 //! account plumbing only.
 
 use std::sync::Arc;
@@ -10,9 +10,9 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Clock;
-use reflect_sdk::strategy::{bond_discovery_keys, pda, StrategyAccounts, TokenInput};
+use reflect_sdk::strategy::{index_discovery_keys, pda, StrategyAccounts, TokenInput};
 
-pub use reflect_sdk::strategy::{BondMints, BondRoute, MintInfo};
+pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
 
 use crate::RouteQuote;
 
@@ -30,7 +30,7 @@ pub struct BondVenue {
     program_id: Pubkey,
     controller: Pubkey,
     loaded: Option<Arc<StrategyAccounts>>,
-    mints: Option<BondMints>,
+    mints: Option<IndexMints>,
 }
 
 impl BondVenue {
@@ -56,14 +56,14 @@ impl BondVenue {
     /// lending's 2 seeds, bonds need 4 (the basket, registry, and oracle-route
     /// facts all live off the controller).
     pub fn seeds(&self) -> Vec<Pubkey> {
-        vec![self.controller, pda::derive_asset_registry(&self.program_id).0, pda::derive_multiocular(&self.program_id).0, pda::derive_main(&self.program_id).0]
+        vec![self.controller, pda::derive_asset_registry(0, &self.program_id).0, pda::derive_multiocular(&self.program_id).0, pda::derive_main(&self.program_id).0]
     }
 
     /// Given the four seed accounts' bytes (controller, asset_registry,
     /// multiocular, main — [`seeds`](Self::seeds) order), the full set of keys
     /// to fetch.
     pub fn discovery_keys(&self, controller: &[u8], asset_registry: &[u8], multiocular: &[u8], main: &[u8]) -> Result<Vec<Pubkey>> {
-        bond_discovery_keys(controller, asset_registry, multiocular, main, &self.program_id).map_err(|e| anyhow!("discovery_keys: {e:?}"))
+        index_discovery_keys(controller, asset_registry, multiocular, main, &self.program_id).map_err(|e| anyhow!("discovery_keys: {e:?}"))
     }
 
     /// Ingest the fetched `(key, owner, data)` set: build the SDK loader once,
@@ -76,7 +76,7 @@ impl BondVenue {
     /// mints is a malformed market, not a legitimate empty one.
     pub fn load(&mut self, accounts: impl IntoIterator<Item = (Pubkey, Pubkey, Vec<u8>)>) -> Result<()> {
         let accts = StrategyAccounts::from_account_map(&self.program_id, &self.controller, accounts).map_err(|e| anyhow!("from_controller: {e:?}"))?;
-        let mints = accts.bond_mints().map_err(|e| anyhow!("bond_mints: {e:?}"))?;
+        let mints = accts.index_mints().map_err(|e| anyhow!("index_mints: {e:?}"))?;
         self.mints = Some(mints);
         self.loaded = Some(Arc::new(accts));
         Ok(())
@@ -92,15 +92,15 @@ impl BondVenue {
         self.loaded.as_deref().context("venue not loaded")
     }
 
-    /// Classify `input_mint → output_mint` into a [`BondRoute`] — which of the
+    /// Classify `input_mint → output_mint` into a [`IndexRoute`] — which of the
     /// three bond ops it maps to. Exposed so the Jupiter shim can pick the
     /// right `Swap` tag before building.
     ///
     /// # Errors
     /// If the venue isn't loaded, or either mint is not the receipt or a
     /// basket asset.
-    pub fn route(&self, input_mint: Pubkey, output_mint: Pubkey) -> Result<BondRoute> {
-        self.loaded()?.bond_route(input_mint, output_mint).map_err(|e| anyhow!("route: {e:?}"))
+    pub fn route(&self, input_mint: Pubkey, output_mint: Pubkey) -> Result<IndexRoute> {
+        self.loaded()?.index_route(input_mint, output_mint).map_err(|e| anyhow!("route: {e:?}"))
     }
 
     /// Quote `amount` of `input_mint` into `output_mint`, ExactIn.
@@ -140,14 +140,14 @@ impl BondVenue {
     /// SDK's mint/swap/redeem build fails.
     pub fn build(&self, user: Pubkey, input_mint: Pubkey, output_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Clock) -> Result<Instruction> {
         let accts = self.loaded()?;
-        let route = accts.bond_route(input_mint, output_mint).map_err(|e| anyhow!("route: {e:?}"))?;
-        let h = accts.bonds(user).map_err(|e| anyhow!("bonds: {e:?}"))?;
+        let route = accts.index_route(input_mint, output_mint).map_err(|e| anyhow!("route: {e:?}"))?;
+        let h = accts.index(user).map_err(|e| anyhow!("index: {e:?}"))?;
         let (_q, built) = match route {
-            BondRoute::Mint { in_asset_id } => h.mint_exact_in(&[TokenInput { asset_id: in_asset_id, amount }], slippage_bps, clock).map_err(|e| anyhow!("mint: {e:?}"))?,
-            BondRoute::Swap { in_asset_id, out_asset_id } => h.swap(in_asset_id, amount, out_asset_id, slippage_bps, clock).map_err(|e| anyhow!("swap: {e:?}"))?,
+            IndexRoute::Mint { in_asset_id } => h.mint_exact_in(&[TokenInput { asset_id: in_asset_id, amount }], slippage_bps, clock).map_err(|e| anyhow!("mint: {e:?}"))?,
+            IndexRoute::Swap { in_asset_id, out_asset_id } => h.swap(in_asset_id, amount, out_asset_id, slippage_bps, clock).map_err(|e| anyhow!("swap: {e:?}"))?,
             // Ceiling, not a target: u64::MAX never over-allocates (the
             // allocator clamps to pool value in checked u128 math).
-            BondRoute::RedeemByReceipt { out_asset_id } => {
+            IndexRoute::RedeemByReceipt { out_asset_id } => {
                 h.redeem_by_receipt(amount, &[TokenInput { asset_id: out_asset_id, amount: u64::MAX }], slippage_bps, clock).map_err(|e| anyhow!("redeem_by_receipt: {e:?}"))?
             },
         };
@@ -180,7 +180,7 @@ mod tests {
         let seeds = v.seeds();
         assert_eq!(seeds.len(), 4);
         assert_eq!(seeds[0], market);
-        assert_eq!(seeds[1], pda::derive_asset_registry(&owner).0);
+        assert_eq!(seeds[1], pda::derive_asset_registry(0, &owner).0);
         assert_eq!(seeds[2], pda::derive_multiocular(&owner).0);
         assert_eq!(seeds[3], pda::derive_main(&owner).0);
     }

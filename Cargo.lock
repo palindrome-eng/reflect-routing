@@ -2173,8 +2173,8 @@ dependencies = [
 
 [[package]]
 name = "reflect-core-sdk"
-version = "0.3.2"
-source = "git+https://github.com/palindrome-eng/reflect-core-sdk.git#507a0914ca46d5dae9113848278ddeaac7c73c3a"
+version = "0.11.0"
+source = "git+https://github.com/palindrome-eng/reflect-core-sdk.git?tag=v0.11.0#6da92b448b8cb0867266aca466ebc737e65825a8"
 dependencies = [
  "reflect-protocol-core",
  "solana-program",
@@ -2223,6 +2223,7 @@ name = "reflect-jupiter-rlp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "reflect-core-sdk",
  "reflect-jupiter-common",
  "reflect-routing-core",
@@ -2236,17 +2237,19 @@ name = "reflect-jupiter-whitelabel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "reflect-core-sdk",
  "reflect-jupiter-common",
  "reflect-routing-core",
+ "serde_json",
  "solana-sdk",
  "tokio",
 ]
 
 [[package]]
 name = "reflect-protocol-core"
-version = "0.3.1"
-source = "git+https://github.com/palindrome-eng/reflect-protocol-core.git?tag=v0.3.1#febd59eba767fa60c6b51fdaeaa16a9261f7bccc"
+version = "0.12.1"
+source = "git+https://github.com/palindrome-eng/reflect-protocol-core.git?tag=v0.12.1#b12ec64731f7f88862ad963e42c7b8822234898a"
 dependencies = [
  "uint",
 ]
@@ -2289,10 +2292,14 @@ name = "reflect-titan-common"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "litesvm",
  "log",
+ "serde_json",
  "solana-account",
  "solana-instruction",
  "solana-pubkey",
+ "solana-sdk",
  "spl-associated-token-account",
  "spl-token 7.0.0",
  "spl-token-2022 9.0.0",
@@ -2328,7 +2335,6 @@ name = "reflect-titan-rlp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bincode",
  "litesvm",
  "reflect-core-sdk",
  "reflect-routing-core",
@@ -2336,11 +2342,8 @@ dependencies = [
  "solana-account",
  "solana-instruction",
  "solana-program",
- "solana-program-pack",
  "solana-pubkey",
  "solana-sdk",
- "spl-associated-token-account",
- "spl-token 7.0.0",
  "tokio",
 ]
 
@@ -2349,7 +2352,6 @@ name = "reflect-titan-whitelabel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bincode",
  "litesvm",
  "reflect-core-sdk",
  "reflect-routing-core",
@@ -2357,11 +2359,8 @@ dependencies = [
  "solana-account",
  "solana-instruction",
  "solana-program",
- "solana-program-pack",
  "solana-pubkey",
  "solana-sdk",
- "spl-associated-token-account",
- "spl-token 7.0.0",
  "tokio",
 ]
 
