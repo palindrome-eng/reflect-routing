@@ -4,11 +4,11 @@
 //! venue's `generate_swap_instruction` proves the property for Titan AND Jupiter.
 //!
 //! Two programs, both committed under `tests/fixtures` (see `SOURCES.md`):
-//! - `rlp_prod.so`, the DUMPED mainnet program, over a mainnet snapshot of
-//!   pool 4 (one Pyth asset; Swap is crank-only there, so deposit is the only
-//!   public route and the swap direction must agree on "no route");
-//! - `rlp_stacking.so`, the oracle-stacking build, bootstrapped through its own
-//!   admin instructions with two banded assets (one single-leg Pyth, one
+//! - `rlp_prod.so`, the DUMPED mainnet program (oracle-stacking since the
+//!   2026-09-29 upgrade), over a mainnet snapshot of pool 4 (one migrated Pyth
+//!   asset; Swap is crank-only there, so deposit is the only public route);
+//! - `rlp_stacking.so`, the branch tip built locally, bootstrapped through its
+//!   own admin instructions with two banded assets (one single-leg Pyth, one
 //!   Doppler-over-inverse-Pyth) and Deposit + Swap opened to the public.
 //!
 //! MANDATORY: a missing fixture is a test FAILURE, not a skip.
@@ -103,7 +103,7 @@ fn boot_prod() -> Prod {
     let asset_mint = snap
         .accounts
         .iter()
-        .filter(|a| a.1 == RLP_PROGRAM && a.2.len() == AssetView::LEN_LEGACY)
+        .filter(|a| a.1 == RLP_PROGRAM && (a.2.len() == AssetView::LEN || a.2.len() == AssetView::LEN_LEGACY))
         .map(|a| AssetView::from_bytes(&a.2).unwrap())
         .find(|v| pv.has_asset(v.index()))
         .map(|v| Pubkey::new_from_array(v.mint()))
@@ -194,6 +194,10 @@ fn leg(oracle: Pubkey, feed_id: [u8; 32], provider: OracleProvider, inverse: boo
 /// both assets with banded chains, initialize the pool listing both, create both
 /// reserves, open Deposit and Swap to the public, then seed both reserves with
 /// genesis deposits built by the venue (each one a parity check of its own).
+///
+/// The SDK's `initialize_lp` sends `protected_vault` as a bare pubkey while this
+/// build reads an `Option<Pubkey>`; `Pubkey::new_unique()` starts with a zero
+/// byte, which the program takes as the `None` tag.
 async fn boot_stacking() -> Stacking {
     let mut svm = LiteSVM::new();
     svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_stacking"));
