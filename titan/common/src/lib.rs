@@ -6,7 +6,10 @@
 //! omitted — the framework supplies its own [`account_caching::AccountsCache`].
 //! Each `titan/<product>` crate depends on this crate and adds only its own
 //! concrete `Reflect<Product>Venue` (in its own `reflect.rs`); `PoolProtocol`
-//! (in [`trading_venue::protocol`]) carries one variant per product.
+//! (in [`trading_venue::protocol`]) carries one variant per product. The
+//! `harness` feature adds the LiteSVM parity harness the product suites share.
 
 pub mod account_caching;
+#[cfg(feature = "harness")]
+pub mod harness;
 pub mod trading_venue;
