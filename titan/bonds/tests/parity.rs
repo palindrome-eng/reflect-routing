@@ -3,7 +3,7 @@
 //! redeem, asset→asset swap), over an amount sweep.
 //!
 //! Regenerate:
-//! `cd reflect-core/programs/reflect-main && DUMP_FORGE_SNAPSHOT=<this crate>/tests/fixtures/forged_bond_basket.json cargo test --test bond_forge_dump_tests`
+//! `cd reflect-core/programs/reflect-main && DUMP_FORGE_SNAPSHOT=<this crate>/tests/fixtures/forged_bond_basket.json cargo test --test index_forge_dump_tests`
 
 use std::collections::HashMap;
 use std::path::PathBuf;

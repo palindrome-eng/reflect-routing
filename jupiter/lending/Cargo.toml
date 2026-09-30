@@ -13,7 +13,7 @@ anyhow = "1"
 
 # parity.rs asserts quote==sdk + the golden account-meta order. Hermetic: it
 # consumes the SAME committed forged fixture as the Titan suite
-# (titan/lending/tests/fixtures/forged_reserve_kamino.json), so it runs fully
+# (titan/lending/tests/fixtures/forged_reserve_save.json), so it runs fully
 # offline. serde_json/base64 parse the fixture JSON shape.
 [dev-dependencies]
 serde_json = "1"

@@ -7,18 +7,16 @@
 //! The controller is not on mainnet: it is FORGED by `reflect_main`'s ix sequence
 //! over Mollusk in reflect-core — which pins solana 2.1 and CANNOT link with
 //! these 2.2 adapters — then dumped to `tests/fixtures/`. This harness loads that
-//! snapshot (a real, program-created Kamino obligation with a non-trivial
-//! position) plus the cloned Kamino `.so`s into one LiteSVM, drives the adapter's
+//! snapshot (a real, program-created Save obligation with a non-trivial
+//! position) plus the Save `.so` into one LiteSVM, drives the adapter's
 //! quote, re-executes the adapter-built ix in the SAME instance, and asserts the
 //! dest-balance delta equals the quote.
 //!
-//! MANDATORY: the fixture JSON and all three program `.so`s are COMMITTED
-//! under `tests/fixtures/`; a missing fixture is a test FAILURE, not a skip.
+//! MANDATORY: the fixture JSON and both program `.so`s are COMMITTED under
+//! `tests/fixtures/`; a missing fixture is a test FAILURE, not a skip.
 //!
-//! Regenerate the fixture (reflect-core stays clean): apply
-//! `tests/fixtures/forge-dump.patch` to a reflect-core checkout, run
-//! `min_provided_routes_gate_in_lending_mint` with `DUMP_FORGE_SNAPSHOT=<path>`,
-//! then revert the patch.
+//! Regenerate the fixture (it also copies both `.so`s next to the JSON):
+//! `cd reflect-core/programs/reflect-main && DUMP_FORGE_SNAPSHOT=<this crate>/tests/fixtures/forged_reserve_save.json cargo test --test lending_forge_dump_tests`
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,16 +36,15 @@ use reflect_titan_common::account_caching::{AccountCacheError, AccountsCache};
 use reflect_titan_common::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
 use reflect_titan_lending::ReflectLendingVenue;
 
-// Owners of the cloned Kamino state in the snapshot; their `.so`s live under
-// reflect-core's gitignored `tests/fixtures/` (not committed — built/dumped).
-const KAMINO_LEND: &str = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD";
-const KAMINO_FARMS: &str = "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr";
+// Owner of the cached Save reserve in the snapshot; the forge copies its `.so`
+// next to the fixture.
+const SAVE_PROGRAM: &str = "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo";
 
 fn manifest_rel(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 fn fixture_path() -> PathBuf {
-    manifest_rel("tests/fixtures/forged_reserve_kamino.json")
+    manifest_rel("tests/fixtures/forged_reserve_save.json")
 }
 /// The committed program fixtures live here, next to the JSON snapshot.
 fn programs_dir() -> PathBuf {
@@ -58,8 +55,7 @@ fn programs_dir() -> PathBuf {
 /// per-amount LiteSVM rebuilds.
 struct Programs {
     reflect: Vec<u8>,
-    klend: Vec<u8>,
-    kfarms: Vec<u8>,
+    save: Vec<u8>,
 }
 
 fn program(file: &str) -> Vec<u8> {
@@ -68,7 +64,7 @@ fn program(file: &str) -> Vec<u8> {
 }
 
 fn resolve_programs() -> Programs {
-    Programs { reflect: program("reflect_main.so"), klend: program("kamino_lend_program_2.so"), kfarms: program("kamino_farm_program_2.so") }
+    Programs { reflect: program("reflect_main.so"), save: program("save_program.so") }
 }
 
 /// Parsed fixture: the program id the controller is owned by, the controller
@@ -76,10 +72,9 @@ fn resolve_programs() -> Programs {
 struct Snapshot {
     program_id: Pubkey,
     controller: Pubkey,
-    /// The privileged forge admin — the ONLY signer `user_permission` grants the
-    /// Mint/Redeem action. Its creds + ATAs are in `map`; LiteSVM verifies the
-    /// signature, so the secret is carried in the fixture.
-    admin: Keypair,
+    /// The anonymous user the forge opened Mint/Redeem to. LiteSVM verifies
+    /// the signature, so the secret is carried in the fixture.
+    user: Keypair,
     clock: SolanaClock,
     map: HashMap<Pubkey, Account>,
 }
@@ -88,7 +83,7 @@ fn pk(s: &str) -> Pubkey {
     s.parse().expect("pubkey")
 }
 
-/// Read `forged_reserve_kamino.json` (the cached-fixture JSON shape) into a
+/// Read `forged_reserve_save.json` (the cached-fixture JSON shape) into a
 /// [`Snapshot`]. Synthesizes the Clock sysvar account from the dumped slot/unix
 /// so the adapter's `update_state` (which fetches CLOCK_SYSVAR) resolves it.
 fn load_snapshot() -> Snapshot {
@@ -97,14 +92,8 @@ fn load_snapshot() -> Snapshot {
 
     let program_id = pk(v["program_id"].as_str().unwrap());
     let controller = pk(v["controller"].as_str().unwrap());
-    let admin = Keypair::from_bytes(&B64.decode(v["admin_secret"].as_str().unwrap()).unwrap()).expect("admin keypair");
-    // Kamino's RefreshReserve rejects a price older than 180s. The forge's clock
-    // passed under Mollusk, but LiteSVM lands ~2s later against the same cloned
-    // `scope_prices` (age=182 observed). Roll the clock back a margin so the
-    // cloned price stays fresh. ponytail: 120s margin; re-tune if a fixture
-    // refresh moves the price timestamp.
-    const STALENESS_MARGIN_S: i64 = 120;
-    let clock = SolanaClock { slot: v["slot"].as_u64().unwrap(), unix_timestamp: v["unix"].as_i64().unwrap() - STALENESS_MARGIN_S, ..Default::default() };
+    let user = Keypair::from_bytes(&B64.decode(v["user_secret"].as_str().unwrap()).unwrap()).expect("user keypair");
+    let clock = SolanaClock { slot: v["slot"].as_u64().unwrap(), unix_timestamp: v["unix"].as_i64().unwrap(), ..Default::default() };
 
     let mut map = HashMap::new();
     for rec in v["accounts"].as_array().unwrap() {
@@ -131,7 +120,7 @@ fn load_snapshot() -> Snapshot {
         Account { lamports: 1, data: bincode::serialize(&clock).expect("ser clock"), owner: sdk_to_pk(&solana_sdk::sysvar::id()), executable: false, rent_epoch: 0 },
     );
 
-    Snapshot { program_id, controller, admin, clock, map }
+    Snapshot { program_id, controller, user, clock, map }
 }
 
 /// [`AccountsCache`] over the snapshot. Contract: order-preserving, miss → None.
@@ -161,15 +150,13 @@ fn to_sdk_account(a: &Account) -> solana_sdk::account::Account {
     solana_sdk::account::Account { lamports: a.lamports, data: a.data.clone(), owner: sdk_key(&a.owner), executable: a.executable, rent_epoch: a.rent_epoch }
 }
 
-/// A LiteSVM with the forged program + the cloned Kamino programs loaded and
-/// every non-program forged account set. The Clock is warped to the forge slot
-/// so Kamino's 180s oracle-staleness check passes against the cloned
-/// `scope_prices`.
+/// A LiteSVM with the forged program + the Save program loaded and every
+/// non-program forged account set. The Clock is pinned to the forge slot so
+/// Save's reserve refresh sees the cached oracle as fresh.
 fn load_svm(snap: &Snapshot, p: &Programs) -> LiteSVM {
     let mut svm = LiteSVM::new();
     svm.add_program(sdk_key(&snap.program_id), &p.reflect);
-    svm.add_program(sdk_key(&pk(KAMINO_LEND)), &p.klend);
-    svm.add_program(sdk_key(&pk(KAMINO_FARMS)), &p.kfarms);
+    svm.add_program(sdk_key(&pk(SAVE_PROGRAM)), &p.save);
 
     // Programs are loaded above; everything else is plain forged state. Skip
     // executable stubs (the loaders' program accounts) and the synthetic Clock
@@ -211,7 +198,7 @@ fn sim_delta(svm: &mut LiteSVM, venue: &ReflectLendingVenue, user: &Keypair, in_
         accounts: ix.accounts.iter().map(|m| solana_sdk::instruction::AccountMeta { pubkey: sdk_key(&m.pubkey), is_signer: m.is_signer, is_writable: m.is_writable }).collect(),
         data: ix.data.clone(),
     };
-    // The Kamino CPIs (RefreshReserve/Obligation + supply) blow past the 200k
+    // The Save CPIs (refresh reserve/obligation + deposit) blow past the 200k
     // default; the forge ran at 1.4M. Match it.
     let cu = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
     let tx = Transaction::new_signed_with_payer(&[cu, sdk_ix], Some(&user.pubkey()), &[user], svm.latest_blockhash());
@@ -305,7 +292,7 @@ async fn parity_swept_both_directions() {
             let q = venue.quote(QuoteRequest { input_mint: in_mint, output_mint: out_mint, amount: amt, swap_type: SwapType::ExactIn }).expect("quote");
             assert!(!q.not_enough_liquidity, "amount {amt} unexpectedly outside the routable band {lo}..={hi}");
             let mut svm = load_svm(&snap, &programs);
-            let delta = sim_delta(&mut svm, &venue, &snap.admin, in_mint, out_mint, amt, in_tp, out_tp).expect("simulate");
+            let delta = sim_delta(&mut svm, &venue, &snap.user, in_mint, out_mint, amt, in_tp, out_tp).expect("simulate");
             assert_eq!(delta.abs_diff(q.expected_output), 0, "atom-exact parity broke: dir {in_mint}->{out_mint} amount {amt}: quote {} sim {delta}", q.expected_output);
         }
     }
@@ -363,7 +350,7 @@ async fn mint_quote_caps_above_mintable() {
 
     // …and execution reverts CapExceeded — sim_delta returns None. Quote agrees.
     let mut svm = load_svm(&snap, &programs);
-    let sim = sim_delta(&mut svm, &venue, &snap.admin, deposit.0, receipt.0, over_cap, deposit.1, receipt.1);
+    let sim = sim_delta(&mut svm, &venue, &snap.user, deposit.0, receipt.0, over_cap, deposit.1, receipt.1);
     assert!(sim.is_none(), "over-cap mint must revert on-chain");
 }
 

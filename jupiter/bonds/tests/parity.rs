@@ -32,7 +32,7 @@ use reflect_sdk::common::Clock as ReflectClock;
 use reflect_jupiter_bonds::ReflectBondsAmm;
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
 
-/// The forge dumps its store here (see reflect-core `bond_forge_dump_tests`).
+/// The forge dumps its store here (see reflect-core `index_forge_dump_tests`).
 /// Jupiter reuses the Titan crate's committed copy rather than duplicating it.
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../titan/bonds/tests/fixtures/forged_bond_basket.json")

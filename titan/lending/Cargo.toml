@@ -18,19 +18,15 @@ solana-account = "2.2"
 solana-instruction = "2.2"
 
 # parity.rs proves quote==execution atom-exact. The controller is not on
-# mainnet, so the Reserve+Kamino cell is FORGED by reflect_main's ix sequence
-# (the program creates the Kamino obligation — it cannot be hand-synthesized)
-# over Mollusk in reflect-core and dumped to tests/fixtures. That forge pins
-# solana 2.1 (mollusk 0.0.13 + reflect_main `=2.1.0`) and CANNOT link with these
-# 2.2 adapters, so it runs there and the committed snapshot is consumed here.
-# LiteSVM 0.6.x is the 2.2-compatible release.
+# mainnet, so the Save cell is FORGED by reflect_main's ix sequence (the
+# program creates the Save obligation - it cannot be hand-synthesized) over
+# Mollusk in reflect-core and dumped to tests/fixtures. The forge lives there
+# so this crate never depends on the program build: the committed snapshot +
+# .so pair is replayed here in LiteSVM, the same loader a mainnet dump uses.
 [dev-dependencies]
 litesvm = "=0.6.1"
 solana-sdk = "2.2"
 solana-program-pack = "2.2"
-# ONLY dumps the cloned Kamino programs from RPC on demand (their .so's are 10MB
-# each — fetched + cached, never committed). reflect_main.so is the forged
-# program under test, committed alongside the fixture.
 spl-token = { version = "7", features = ["no-entrypoint"] }
 spl-associated-token-account = "6"
 serde_json = "1"

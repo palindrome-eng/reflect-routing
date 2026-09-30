@@ -11,7 +11,7 @@
 //!     positionally — the binding contract handed to Jupiter.
 //!
 //! OFFLINE: state is the committed forged snapshot shared with the Titan suite
-//! (`titan/lending/tests/fixtures/forged_reserve_kamino.json`). The program id is
+//! (`titan/lending/tests/fixtures/forged_reserve_save.json`). The program id is
 //! the forge's (`moCKesf…`), read from the controller account's owner — the
 //! adapter is program-id-relative, so nothing is hardcoded to mainnet.
 
@@ -32,7 +32,7 @@ use reflect_jupiter_lending::ReflectLendingAmm;
 /// The forge dumps its store here (see reflect-core `routing_tests.rs`). Jupiter
 /// reuses the Titan crate's committed copy rather than duplicating it.
 fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../titan/lending/tests/fixtures/forged_reserve_kamino.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../titan/lending/tests/fixtures/forged_reserve_save.json")
 }
 
 fn pk(s: &str) -> Pubkey {
