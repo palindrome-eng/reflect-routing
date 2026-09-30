@@ -91,8 +91,10 @@ fn setup() -> (ReflectBondsAmm, Snapshot, ClockRef, Pubkey, Vec<Pubkey>) {
     if amm.get_reserve_mints().len() < 3 {
         amm.update(&snap.map).expect("update round 2"); // re-run after dynamic accounts resolved
     }
+    // mints() = [receipt, USDC slot 0, weighted assets..]: `add_asset` pins
+    // USDC to slot 0 and the forge leaves its pool unfunded.
     let mints = amm.get_reserve_mints();
-    assert!(mints.len() >= 3, "Jupiter amm resolved {} mints, expected receipt + 2 assets", mints.len());
+    assert_eq!(mints.len(), 4, "Jupiter amm resolved {} mints, expected receipt + USDC slot 0 + 2 weighted assets", mints.len());
     (amm, snap, clock_ref, mints[0], mints[1..].to_vec())
 }
 
@@ -121,7 +123,7 @@ async fn jupiter_quote_equals_core_venue() {
     let venue = core_venue(&snap);
     let rc = reflect_clock(&clock);
 
-    for (in_mint, out_mint) in [(assets[0], receipt), (receipt, assets[0]), (assets[0], assets[1]), (assets[1], assets[0])] {
+    for (in_mint, out_mint) in [(assets[0], receipt), (assets[1], receipt), (receipt, assets[1]), (assets[1], assets[2]), (assets[2], assets[1])] {
         for amount in [1_000u64, 250_000, 5_000_000] {
             let q = amm.quote(&QuoteParams { amount, input_mint: in_mint, output_mint: out_mint, swap_mode: SwapMode::ExactIn }).expect("jupiter quote");
             let core = venue.quote(in_mint, out_mint, amount, rc).expect("core quote").expect("core route clears");
@@ -136,8 +138,11 @@ async fn jupiter_quote_equals_core_venue() {
 #[tokio::test(flavor = "current_thread")]
 async fn jupiter_quote_errs_on_would_revert() {
     let (amm, _snap, _clock, receipt, assets) = setup();
-    let r = amm.quote(&QuoteParams { amount: u64::MAX, input_mint: receipt, output_mint: assets[0], swap_mode: SwapMode::ExactIn });
+    let r = amm.quote(&QuoteParams { amount: u64::MAX, input_mint: receipt, output_mint: assets[1], swap_mode: SwapMode::ExactIn });
     assert!(r.is_err(), "u64::MAX past capacity must surface as Err, not a bad route");
+    // The unfunded USDC slot-0 pool cannot pay a redeem at any size.
+    let r = amm.quote(&QuoteParams { amount: 1_000, input_mint: receipt, output_mint: assets[0], swap_mode: SwapMode::ExactIn });
+    assert!(r.is_err(), "redeem into the empty slot-0 pool must surface as Err");
 }
 
 /// GOLDEN: the `account_metas` ORDER from `get_swap_and_account_metas` is the
@@ -151,7 +156,7 @@ async fn golden_account_metas_order_per_route() {
     let venue = core_venue(&snap);
     let user = Pubkey::new_unique();
 
-    for (in_mint, out_mint) in [(assets[0], receipt), (receipt, assets[0]), (assets[0], assets[1])] {
+    for (in_mint, out_mint) in [(assets[1], receipt), (receipt, assets[1]), (assets[1], assets[2])] {
         let sp = SwapParams {
             swap_mode: SwapMode::ExactIn,
             in_amount: 250_000,

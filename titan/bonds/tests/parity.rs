@@ -136,6 +136,10 @@ fn load_svm(snap: &Snapshot) -> LiteSVM {
 
 /// Build the venue from the forged controller and `update_state` it off the
 /// snapshot. Returns (venue, snapshot, receipt mint, basket asset mints).
+///
+/// Basket slot 0 is ALWAYS USDC: `add_asset` requires it, the forge lists it
+/// at zero weight and never funds its pool. So `assets[0]` mints but has no
+/// redeem depth, and `assets[1..]` are the weighted, funded legs.
 async fn setup() -> (ReflectBondVenue, Snapshot, Pubkey, Vec<Pubkey>) {
     let snap = load_snapshot();
     let ctrl = snap.map.get(&snap.controller).expect("controller in fixture").clone();
@@ -145,7 +149,7 @@ async fn setup() -> (ReflectBondVenue, Snapshot, Pubkey, Vec<Pubkey>) {
 
     // mints() = [receipt, asset_0..n] - the venue's documented order.
     let toks: Vec<Pubkey> = venue.get_token_info().iter().map(|t| t.pubkey).collect();
-    assert!(toks.len() >= 3, "expected receipt + 2 basket assets, got {}", toks.len());
+    assert_eq!(toks.len(), 4, "expected receipt + USDC slot 0 + 2 weighted assets, got {}", toks.len());
     (venue, snap, toks[0], toks[1..].to_vec())
 }
 
@@ -209,16 +213,19 @@ fn assert_direction(venue: &ReflectBondVenue, snap: &Snapshot, in_mint: Pubkey, 
 }
 
 /// Every direction of the basket, swept: asset→receipt (mint), receipt→asset
-/// (constructed receipt-exact redeem), asset→asset (swap).
+/// (constructed receipt-exact redeem), asset→asset (swap). The unfunded USDC
+/// slot 0 only mints.
 #[tokio::test(flavor = "current_thread")]
 async fn parity_all_directions_swept() {
     let (venue, snap, receipt, assets) = setup().await;
+    let (usdc, a, b) = (assets[0], assets[1], assets[2]);
 
     for amount in [1_000u64, 250_000, 5_000_000] {
-        assert_direction(&venue, &snap, assets[0], receipt, amount); // mint
-        assert_direction(&venue, &snap, receipt, assets[0], amount); // redeem
-        assert_direction(&venue, &snap, assets[0], assets[1], amount); // swap
-        assert_direction(&venue, &snap, assets[1], assets[0], amount); // swap back
+        assert_direction(&venue, &snap, usdc, receipt, amount); // mint through slot 0
+        assert_direction(&venue, &snap, a, receipt, amount); // mint
+        assert_direction(&venue, &snap, receipt, a, amount); // redeem
+        assert_direction(&venue, &snap, a, b, amount); // swap
+        assert_direction(&venue, &snap, b, a, amount); // swap back
     }
 }
 
@@ -233,6 +240,11 @@ async fn edges_zero_and_overask() {
     assert_eq!(zero.expected_output, 0);
     assert!(!zero.not_enough_liquidity, "zero input is routable-with-zero-output");
 
-    let over = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[0], amount: u64::MAX, swap_type: SwapType::ExactIn }).expect("over quote");
+    let over = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[1], amount: u64::MAX, swap_type: SwapType::ExactIn }).expect("over quote");
     assert!(over.not_enough_liquidity, "over-ask must flag no-liquidity");
+
+    // The unfunded slot-0 pool has nothing to pay out: a redeem into it is a
+    // predicted revert, so no liquidity rather than a lying quote.
+    let usdc = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[0], amount: 1_000, swap_type: SwapType::ExactIn }).expect("usdc quote");
+    assert!(usdc.not_enough_liquidity, "redeem into the empty slot-0 pool must flag no-liquidity");
 }

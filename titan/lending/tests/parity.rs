@@ -267,14 +267,20 @@ fn log_uniform_samples(lo: u64, hi: u64, n: usize) -> Vec<u64> {
 // 1e15). MINT is atom-exact up to the cap, but `quote()` does NOT model the cap
 // (see `mint_quote_ignores_cap_above_mintable`), so the mint sweep stays a
 // safe margin below it. REDEEM is bounded by the SupplyFloor would_revert, which
-// `bounds(1,0)` finds correctly; tiny redeems revert on Kamino withdraw dust, so
+// `bounds(1,0)` finds correctly; tiny redeems revert on venue withdraw dust, so
 // the redeem sweep starts above a dust floor.
 const MINT_LO: u64 = 1_000;
 const MINT_HI: u64 = 1_000_000_000_000; // 1e12 — well under the 1e15 cap
 const REDEEM_LO: u64 = 1_000_000; // above the withdraw-dust revert threshold
+/// Units the venue unwind may shave off a redeem below its quote. The SDK
+/// conformance suite pins the same bound (reflect-core `lending_sdk_tests`).
+const REDEEM_DUST_TOL: u64 = 4;
 
-/// `delta.abs_diff(quote.expected_output) == 0` — exact, both directions, across
-/// the band endpoints + a log-uniform sweep (≥50 each).
+/// Mint: `delta == quote`, exact. Redeem: the quote is the program's withdrawal
+/// TARGET and a tight UPPER bound on the payout; the venue unwind (Save's
+/// liquidity -> collateral -> liquidity floor round-trip) may shave dust, so
+/// `quote - REDEEM_DUST_TOL <= delta <= quote`. Both directions, across the
+/// band endpoints + a log-uniform sweep (>=50 each).
 #[tokio::test(flavor = "current_thread")]
 async fn parity_swept_both_directions() {
     let programs = resolve_programs();
@@ -293,7 +299,12 @@ async fn parity_swept_both_directions() {
             assert!(!q.not_enough_liquidity, "amount {amt} unexpectedly outside the routable band {lo}..={hi}");
             let mut svm = load_svm(&snap, &programs);
             let delta = sim_delta(&mut svm, &venue, &snap.user, in_mint, out_mint, amt, in_tp, out_tp).expect("simulate");
-            assert_eq!(delta.abs_diff(q.expected_output), 0, "atom-exact parity broke: dir {in_mint}->{out_mint} amount {amt}: quote {} sim {delta}", q.expected_output);
+            if in_mint == deposit.0 {
+                assert_eq!(delta, q.expected_output, "atom-exact mint parity broke: amount {amt}: quote {} sim {delta}", q.expected_output);
+            } else {
+                assert!(delta <= q.expected_output, "redeem paid MORE than quoted: amount {amt}: quote {} sim {delta}", q.expected_output);
+                assert!(q.expected_output - delta <= REDEEM_DUST_TOL, "redeem dust past tolerance: amount {amt}: quote {} sim {delta}", q.expected_output);
+            }
         }
     }
 }
@@ -313,8 +324,8 @@ async fn parity_roundtrip_identity() {
     assert!(diff <= amount / 100, "roundtrip drifted >1%: {amount} -> {} -> {} (diff {diff})", q1.expected_output, q2.expected_output);
 }
 
-/// Edges: amount 0 → clean 0 (never panics); and the REDEEM supply-floor
-/// correctly surfaces `not_enough_liquidity` (the adapter's would_revert path).
+/// Edges: amount 0 → clean 0 (never panics); and a REDEEM worth more than the
+/// vault surfaces `not_enough_liquidity` (the adapter's would_revert path).
 /// Quote-only.
 #[tokio::test(flavor = "current_thread")]
 async fn edges_zero_and_redeem_floor() {
@@ -325,11 +336,11 @@ async fn edges_zero_and_redeem_floor() {
         assert!(!z.not_enough_liquidity, "amount 0 is not a liquidity failure");
     }
 
-    // Redeeming far past the position breaches the supply floor → would_revert →
+    // A burn worth more than the vault underflows on chain → would_revert →
     // not_enough_liquidity. The ceiling lives at bounds(1,0).hi.
     let (_, rhi) = venue.bounds(1, 0).expect("redeem bounds");
     let over = venue.quote(QuoteRequest { input_mint: receipt.0, output_mint: deposit.0, amount: rhi.saturating_mul(4), swap_type: SwapType::ExactIn }).expect("over quote");
-    assert!(over.not_enough_liquidity, "redeem past the supply floor must report no liquidity");
+    assert!(over.not_enough_liquidity, "redeem past the vault must report no liquidity");
 }
 
 /// MINT cap parity: above the strategy mint cap the adapter quote now reports
