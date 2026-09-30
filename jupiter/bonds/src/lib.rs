@@ -16,7 +16,7 @@ use reflect_routing_core::{BondVenue, IndexRoute};
 use reflect_sdk::common::Clock as ReflectClock;
 
 /// [`BondVenue`] presented as a Jupiter market. Bonds need 4 seed accounts
-/// (controller, asset_registry, multiocular, main - [`BondVenue::seeds`]
+/// (controller, asset_registry, multiocular, token_registry - [`BondVenue::seeds`]
 /// order), unlike lending's 2, so the cached seed bytes are an array, not a
 /// pair of `Option`s.
 #[derive(Clone)]
@@ -68,8 +68,8 @@ impl Amm for ReflectBondsAmm {
     fn get_accounts_to_update(&self) -> Vec<Pubkey> {
         let seeds = self.venue.seeds();
         match &self.seed_data {
-            [Some(c), Some(ar), Some(mo), Some(m)] => self.venue.discovery_keys(c, ar, mo, m).unwrap_or_else(|_| seeds.clone()),
-            _ => seeds, // cold: [controller, asset_registry, multiocular, main]
+            [Some(c), Some(ar), Some(mo), Some(tr)] => self.venue.discovery_keys(c, ar, mo, tr).unwrap_or_else(|_| seeds.clone()),
+            _ => seeds, // cold: [controller, asset_registry, multiocular, token_registry]
         }
     }
 
@@ -79,12 +79,12 @@ impl Amm for ReflectBondsAmm {
         for (slot, seed) in self.seed_data.iter_mut().zip(&seeds) {
             *slot = m.get(seed).map(|a| a.data.clone());
         }
-        let [Some(c), Some(ar), Some(mo), Some(main)] = &self.seed_data else {
+        let [Some(c), Some(ar), Some(mo), Some(tr)] = &self.seed_data else {
             return Ok(()); // cold: seeds not in the map yet
         };
 
         // A present-but-undecodable seed is an error, not "still cold".
-        let keys = self.venue.discovery_keys(c, ar, mo, main)?;
+        let keys = self.venue.discovery_keys(c, ar, mo, tr)?;
         self.venue.load(keys.iter().filter_map(|k| m.get(k).map(|a| (*k, a.owner, a.data.clone()))))
     }
 

@@ -51,19 +51,19 @@ impl BondVenue {
     }
 
     /// The accounts to fetch before the full set is known:
-    /// `[controller, asset_registry, multiocular, main]` — this ORDER is the
-    /// contract [`discovery_keys`](Self::discovery_keys) consumes. Unlike
-    /// lending's 2 seeds, bonds need 4 (the basket, registry, and oracle-route
-    /// facts all live off the controller).
+    /// `[controller, asset_registry, multiocular, token_registry]` — this ORDER
+    /// is the contract [`discovery_keys`](Self::discovery_keys) consumes. Unlike
+    /// lending's 2 seeds, bonds need 4 (the basket, registry, oracle-route and
+    /// SPL facts all live off the controller).
     pub fn seeds(&self) -> Vec<Pubkey> {
-        vec![self.controller, pda::derive_asset_registry(0, &self.program_id).0, pda::derive_multiocular(&self.program_id).0, pda::derive_main(&self.program_id).0]
+        vec![self.controller, pda::derive_asset_registry(0, &self.program_id).0, pda::derive_multiocular(&self.program_id).0, pda::derive_token_registry(&self.program_id).0]
     }
 
     /// Given the four seed accounts' bytes (controller, asset_registry,
-    /// multiocular, main — [`seeds`](Self::seeds) order), the full set of keys
-    /// to fetch.
-    pub fn discovery_keys(&self, controller: &[u8], asset_registry: &[u8], multiocular: &[u8], main: &[u8]) -> Result<Vec<Pubkey>> {
-        index_discovery_keys(controller, asset_registry, multiocular, main, &self.program_id).map_err(|e| anyhow!("discovery_keys: {e:?}"))
+    /// multiocular, token_registry — [`seeds`](Self::seeds) order), the full
+    /// set of keys to fetch.
+    pub fn discovery_keys(&self, controller: &[u8], asset_registry: &[u8], multiocular: &[u8], token_registry: &[u8]) -> Result<Vec<Pubkey>> {
+        index_discovery_keys(controller, asset_registry, multiocular, token_registry, &self.program_id).map_err(|e| anyhow!("discovery_keys: {e:?}"))
     }
 
     /// Ingest the fetched `(key, owner, data)` set: build the SDK loader once,
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn seeds_are_controller_then_registry_multiocular_main_in_order() {
+    fn seeds_are_controller_then_registry_multiocular_token_registry_in_order() {
         let market = Pubkey::new_unique();
         let owner = Pubkey::new_unique();
         let v = BondVenue::from_market(market, owner);
@@ -182,6 +182,6 @@ mod tests {
         assert_eq!(seeds[0], market);
         assert_eq!(seeds[1], pda::derive_asset_registry(0, &owner).0);
         assert_eq!(seeds[2], pda::derive_multiocular(&owner).0);
-        assert_eq!(seeds[3], pda::derive_main(&owner).0);
+        assert_eq!(seeds[3], pda::derive_token_registry(&owner).0);
     }
 }

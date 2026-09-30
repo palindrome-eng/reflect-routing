@@ -91,20 +91,20 @@ impl TradingVenue for ReflectBondVenue {
     }
 
     async fn update_state(&mut self, cache: &dyn AccountsCache) -> Result<(), TradingVenueError> {
-        // seeds (controller, asset_registry, multiocular, main) + Clock sysvar.
+        // seeds (controller, asset_registry, multiocular, token_registry) + Clock sysvar.
         let seeds = self.venue.seeds();
         let p1: Vec<Pubkey> = seeds.iter().copied().chain([CLOCK_SYSVAR]).collect();
         let base = cache.get_accounts(&p1).await?;
         let controller = base[0].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[0].into()))?;
         let asset_registry = base[1].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[1].into()))?;
         let multiocular = base[2].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[2].into()))?;
-        let main = base[3].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[3].into()))?;
+        let token_registry = base[3].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[3].into()))?;
         let clock_acc = base[4].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(CLOCK_SYSVAR.into()))?;
         self.clock = Clock::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
 
         // the venue derives the full set from the seed bytes; fetch it and
         // hand it back for loading.
-        let keys = self.venue.discovery_keys(&controller.data, &asset_registry.data, &multiocular.data, &main.data).map_err(venue_err)?;
+        let keys = self.venue.discovery_keys(&controller.data, &asset_registry.data, &multiocular.data, &token_registry.data).map_err(venue_err)?;
         let datas = cache.get_accounts(&keys).await?;
         self.venue.load(keys.iter().zip(datas).filter_map(|(k, a)| a.map(|a| (*k, a.owner, a.data)))).map_err(venue_err)?;
 
