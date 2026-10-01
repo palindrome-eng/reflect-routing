@@ -216,6 +216,7 @@ fn assert_direction(venue: &ReflectBondVenue, snap: &Snapshot, in_mint: Pubkey, 
 /// (constructed receipt-exact redeem), asset→asset (swap). The unfunded USDC
 /// slot 0 only mints.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn parity_all_directions_swept() {
     let (venue, snap, receipt, assets) = setup().await;
     let (usdc, a, b) = (assets[0], assets[1], assets[2]);
@@ -232,6 +233,7 @@ async fn parity_all_directions_swept() {
 /// An absurd request maps to no-liquidity (never a lying quote), and the venue
 /// stays quote-consistent on the zero edge (`bounds()` relies on both).
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn edges_zero_and_overask() {
     let (venue, snap, receipt, assets) = setup().await;
     let _ = snap;

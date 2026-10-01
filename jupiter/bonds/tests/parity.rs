@@ -118,6 +118,7 @@ fn reflect_clock(clock: &ClockRef) -> ReflectClock {
 /// The Jupiter adapter's quote must equal the shared BondVenue quote (= Titan's,
 /// = on-chain execution via the Titan bonds suite). Every direction kind, swept.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn jupiter_quote_equals_core_venue() {
     let (amm, snap, clock, receipt, assets) = setup();
     let venue = core_venue(&snap);
@@ -136,6 +137,7 @@ async fn jupiter_quote_equals_core_venue() {
 /// would_revert edge: a redeem past the basket's capacity maps to no-route, so
 /// the Jupiter adapter returns `Err` (no route, not a bad route).
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn jupiter_quote_errs_on_would_revert() {
     let (amm, _snap, _clock, receipt, assets) = setup();
     let r = amm.quote(&QuoteParams { amount: u64::MAX, input_mint: receipt, output_mint: assets[1], swap_mode: SwapMode::ExactIn });
@@ -151,6 +153,7 @@ async fn jupiter_quote_errs_on_would_revert() {
 /// that the user is the sole signer, and records each full order to stdout for
 /// the Jupiter handoff package.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn golden_account_metas_order_per_route() {
     let (amm, snap, _clock, receipt, assets) = setup();
     let venue = core_venue(&snap);

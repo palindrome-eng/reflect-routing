@@ -23,3 +23,6 @@ target
 # Lavish/redline review artifacts (session-local)
 .lavish/
 
+# Forge fixtures: builds and state of a program version that is not on mainnet; regenerate locally.
+titan/*/tests/fixtures/forged_*.json
+titan/*/tests/fixtures/programs/reflect_main.so

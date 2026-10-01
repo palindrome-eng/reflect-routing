@@ -110,6 +110,7 @@ fn sdk_quote(snap: &Snapshot, input_mint: Pubkey, amount: u64, clock: &ClockRef)
 /// The Jupiter adapter's quote must equal the reflect-sdk quote (= Titan's, =
 /// on-chain execution via the Titan suite). Both directions, swept amounts.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn jupiter_quote_equals_sdk() {
     let (amm, snap, clock) = setup();
     let mints = amm.get_reserve_mints();
@@ -128,6 +129,7 @@ async fn jupiter_quote_equals_sdk() {
 /// would_revert edge: past the mint cap the SDK predicts `CapExceeded`, so the
 /// Jupiter adapter returns `Err` (no route, not a bad route).
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn jupiter_quote_errs_on_would_revert() {
     let (amm, _snap, _clock) = setup();
     let mints = amm.get_reserve_mints();
@@ -140,6 +142,7 @@ async fn jupiter_quote_errs_on_would_revert() {
 /// breaking. Asserts the structural shape (Reflect ix variant, user is the sole
 /// signer) and records the full order to stdout for the Jupiter handoff package.
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn golden_account_metas_order() {
     let (amm, _snap, _clock) = setup();
     let mints = amm.get_reserve_mints();
