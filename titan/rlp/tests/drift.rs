@@ -26,7 +26,7 @@ const NOW: Clock = Clock { slot: 500_000, epoch_start_timestamp: 0, epoch: 0, le
 #[tokio::test(flavor = "current_thread")]
 async fn slash_wiped_pool_refuses_deposits() {
     let mut svm = litesvm::LiteSVM::new();
-    svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_stacking"));
+    svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_prod"));
     set_clock(&mut svm, &NOW);
     let admin = funded_user(&mut svm);
     let pid = &RLP_PROGRAM;

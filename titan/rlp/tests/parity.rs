@@ -3,13 +3,12 @@
 //! quote/build to the same `reflect-routing-core` venue, so executing the Titan
 //! venue's `generate_swap_instruction` proves the property for Titan AND Jupiter.
 //!
-//! Two programs, both committed under `tests/fixtures` (see `SOURCES.md`):
-//! - `rlp_prod.so`, the DUMPED mainnet program (oracle-stacking since the
-//!   2026-09-29 upgrade), over a mainnet snapshot of pool 4 (one migrated Pyth
-//!   asset; Swap is crank-only there, so deposit is the only public route);
-//! - `rlp_stacking.so`, the branch tip built locally, bootstrapped through its
-//!   own admin instructions with two banded assets (one single-leg Pyth, one
-//!   Doppler-over-inverse-Pyth) and Deposit + Swap opened to the public.
+//! One program, `rlp_prod.so`, the DUMPED mainnet binary (see `SOURCES.md`), run two ways:
+//! - over a mainnet snapshot of pool 4 (one migrated Pyth asset; Swap is
+//!   crank-only there, so deposit is the only public route);
+//! - bootstrapped from an empty ledger through its own admin instructions with
+//!   two banded assets (one single-leg Pyth, one Doppler-over-inverse-Pyth) and
+//!   Deposit + Swap opened to the public.
 //!
 //! MANDATORY: a missing fixture is a test FAILURE, not a skip.
 
@@ -196,7 +195,7 @@ fn leg(oracle: Pubkey, feed_id: [u8; 32], provider: OracleProvider, inverse: boo
 /// genesis deposits built by the venue (each one a parity check of its own).
 async fn boot_stacking() -> Stacking {
     let mut svm = LiteSVM::new();
-    svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_stacking"));
+    svm.add_program(RLP_PROGRAM, &program_bytes(&fixtures(), "rlp_prod"));
     set_clock(&mut svm, &NOW);
     let admin = funded_user(&mut svm);
     let pid = &RLP_PROGRAM;
