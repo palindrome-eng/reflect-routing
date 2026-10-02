@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tech debt: extract shared titan/jupiter adapter crates</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --border: #d8d8d8;
+    --code-bg: #f5f5f5; --accent: #0b5fff; --warn-bg: #fff4e0; --warn-border: #e0a030;
+    --ok-bg: #eaf7ea; --ok-border: #3a9a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --fg: #e4e4e4; --muted: #9a9a9a; --border: #3a3d44;
+      --code-bg: #22252b; --accent: #6ea2ff; --warn-bg: #3a2f18; --warn-border: #c08a30;
+      --ok-bg: #1c2f1c; --ok-border: #4aa04a;
+    }
+  }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         background: var(--bg); color: var(--fg); margin: 0; line-height: 1.55; }
+  main { max-width: 980px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+  h1 { font-size: 1.6rem; border-bottom: 2px solid var(--border); padding-bottom: .5rem; }
+  h2 { font-size: 1.3rem; margin-top: 2.6rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 1.6rem; }
+  code, pre { font-family: "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace; font-size: .86em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+        padding: .8rem 1rem; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .box { border-radius: 6px; padding: .8rem 1rem; margin: 1rem 0; border: 1px solid; }
+  .warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .ok { background: var(--ok-bg); border-color: var(--ok-border); }
+  .box > b:first-child { display: block; margin-bottom: .3rem; }
+  .muted { color: var(--muted); }
+  .filetree { line-height: 1.4; }
+  .filetree .same { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Tech debt: extract shared titan/&lt;product&gt; and jupiter/&lt;product&gt; adapter crates</h1>
+<p class="muted">Filed 2026-07-07 after implementing <code>titan/whitelabel</code> + <code>jupiter/whitelabel</code>, the third instance of a pattern first noticed in <code>bonds</code> (the second). Scoped out, not implemented - repo: <code>~/projects/reflect/reflect-routing</code>.</p>
+
+<div class="box warn">
+<b>Status: not started.</b>
+This is a deferred refactor of already-committed, already-pushed code (<code>titan/lending</code>, <code>titan/bonds</code>, <code>jupiter/lending</code>, <code>jupiter/bonds</code> all ship on <code>origin/feat/refactor-routing-based-on-reflect-core-sdk</code>). Do not start it opportunistically inside an unrelated change - it touches every existing adapter crate's imports. Do it as its own PR.
+</div>
+
+<h2>1. The problem, with numbers</h2>
+
+<p>Every new <code>titan/&lt;product&gt;</code> and <code>jupiter/&lt;product&gt;</code> crate is built by copying the previous product's crate and swapping the venue type. That copy carries along a large block of code that is <b>byte-identical</b> across all three existing instances (lending, bonds, whitelabel) and will be byte-identical again for the fourth (rlp, not yet built). None of this is Reflect-specific - it is the vendored upstream interface (Titan's <code>TradingVenue</code> trait, Jupiter's <code>Amm</code> trait) that this workspace copies per-crate instead of depending on, for reasons that remain valid (see §4) but that don't require the copy to happen more than once.</p>
+
+<h3>1.1 Titan: 519 lines, verified byte-identical, ×3 crates today</h3>
+<table>
+<tr><th>File</th><th>Lines</th><th>Diff lending↔bonds</th><th>Diff lending↔whitelabel</th></tr>
+<tr><td><code>trading_venue/mod.rs</code></td><td>124</td><td>empty</td><td>empty</td></tr>
+<tr><td><code>trading_venue/bounds.rs</code></td><td>160</td><td>empty</td><td>empty</td></tr>
+<tr><td><code>trading_venue/error.rs</code></td><td>121</td><td>empty</td><td>empty</td></tr>
+<tr><td><code>trading_venue/token_info.rs</code></td><td>67</td><td>empty</td><td>empty</td></tr>
+<tr><td><code>account_caching/mod.rs</code></td><td>47</td><td>empty</td><td>empty</td></tr>
+<tr><td><b>Total identical</b></td><td><b>519</b></td><td colspan="2"></td></tr>
+</table>
+<p>Verified with <code>diff titan/lending/src/&lt;file&gt; titan/bonds/src/&lt;file&gt;</code> and the same against <code>titan/whitelabel</code> - all five diffs are empty. The ONLY file that legitimately differs per crate is <code>trading_venue/protocol.rs</code> (~30 lines): one added <code>PoolProtocol</code> enum variant (<code>ReflectLending</code> / <code>ReflectBonds</code> / <code>ReflectWhitelabel</code>) plus its <code>Display</code> arm.</p>
+<p><b>Duplication today: 519 × 3 = 1557 lines shipped, 519 of them unique.</b> Landing rlp as a fourth crate adds another 519 duplicate lines under the current pattern.</p>
+
+<h3>1.2 Jupiter: ~150-180 lines of trait/type boilerplate + a ~110-line enum, ×3 crates</h3>
+<p><code>jupiter/{lending,bonds,whitelabel}/src/lib.rs</code> are 300 / 319 / 315 lines each. <code>diff jupiter/lending/src/lib.rs jupiter/bonds/src/lib.rs</code> shows the first ~146 lines (module doc aside) - the vendored <code>Amm</code> trait, <code>SwapMode</code>, <code>QuoteParams</code>, <code>Quote</code>, <code>QuoteMintToReferrer</code>/<code>AccountMap</code> type aliases, <code>SwapParams</code>, <code>SwapAndAccountMetas</code>, <code>KeyedAccount</code>, <code>AmmContext</code>, and the whole <code>ClockRef</code> struct + its two impls - are identical. Only the module doc, the venue import, and the <code>ReflectXAmm</code> struct/impl (from line ~150 on) differ.</p>
+<p><code>swap.rs</code> is the same shape: a ~110-line vendored <code>Swap</code> enum (the full upstream tag list - Saber, TokenSwap, Raydium, ... TesseraV, <code>ReflectS1</code>) is identical across all three crates. Only the handful of appended Reflect-specific tags differ:</p>
+<pre><code>lending:    (nothing appended - ReflectS1 is the whole Reflect surface)
+bonds:      + ReflectBondsMint, ReflectBondsSwap, ReflectBondsRedeem
+whitelabel: + ReflectProxyWrap, ReflectProxyUnwrap</code></pre>
+<p>This is actually a correctness smell, not just a size one: there are currently <b>three distinct <code>Swap</code> types</b> (<code>reflect_jupiter_lending::Swap</code>, <code>reflect_jupiter_bonds::Swap</code>, <code>reflect_jupiter_whitelabel::Swap</code>) that are not interchangeable even though conceptually there is exactly one Jupiter backend tag space. Nothing forces that today, but it's the kind of thing that bites later (e.g. a router or test harness that wants to reason about "all Reflect tags" has to know about N unrelated enums).</p>
+
+<h2>2. Proposed design</h2>
+
+<p>Two new workspace-internal crates, one per aggregator, holding exactly the vendored boilerplate and nothing product-specific:</p>
+
+<div class="filetree">
+<pre>titan/common/                          <span class="muted"># pkg reflect-titan-common</span>
+  Cargo.toml
+  src/
+    lib.rs                             <span class="muted"># pub mod trading_venue; pub mod account_caching;</span>
+    trading_venue/
+      mod.rs                           <span class="muted"># moved verbatim from titan/lending</span>
+      bounds.rs                        <span class="muted"># moved verbatim</span>
+      error.rs                         <span class="muted"># moved verbatim</span>
+      token_info.rs                    <span class="muted"># moved verbatim</span>
+      <span class="same"># NOTE: protocol.rs does NOT move - stays per-product (see 2.1)</span>
+    account_caching/
+      mod.rs                           <span class="muted"># moved verbatim</span>
+
+jupiter/common/                        <span class="muted"># pkg reflect-jupiter-common</span>
+  Cargo.toml
+  src/
+    lib.rs                             <span class="muted"># Amm trait, ClockRef, QuoteParams/Quote/SwapParams/
+                                        #  SwapAndAccountMetas/KeyedAccount/AmmContext, AccountMap alias</span>
+    swap.rs                            <span class="muted"># the vendored tag enum, now holding EVERY product's
+                                        #  Reflect tags in one place (see 2.2)</span>
+</pre>
+</div>
+
+<h3>2.1 Titan: why <code>protocol.rs</code> stays behind</h3>
+<p><code>PoolProtocol</code> is a plain enum with one variant per product (<code>ReflectLending</code>, <code>ReflectBonds</code>, <code>ReflectWhitelabel</code>, ...). Sharing it would mean either (a) one enum in the common crate that every product crate adds a variant to - which reintroduces a dependency edge in the wrong direction (the shared crate would need to know about every product), or (b) a generic/trait-object <code>protocol()</code> return type, which is more machinery than a 30-line file justifies. Leave it per-crate; it is the one piece of vendored-shaped code that is genuinely product-specific, and it's small enough that copying it is cheaper than any abstraction over it.</p>
+
+<h3>2.2 Jupiter: unify the <code>Swap</code> enum instead of forking it</h3>
+<p>Move the vendored ~110-line enum into <code>jupiter/common::swap</code> and append <b>every</b> product's Reflect tags to that single definition:</p>
+<pre><code>pub enum Swap {
+    // ...the ~65 vendored upstream variants, unchanged...
+    ReflectS1,               // lending
+    ReflectBondsMint,        // bonds
+    ReflectBondsSwap,
+    ReflectBondsRedeem,
+    ReflectProxyWrap,        // whitelabel
+    ReflectProxyUnwrap,
+    // future: ReflectRlpRestake, ReflectRlpSwap, ...
+}</code></pre>
+<p>Each <code>jupiter/&lt;product&gt;</code> crate imports this one type instead of defining its own. Adding a fifth product means adding variants to one file in one place, not forking a ~110-line enum into a sixth copy. This also fixes the "three unrelated <code>Swap</code> types" smell from §1.2 - there is exactly one Jupiter tag space, so there should be exactly one Rust type for it.</p>
+
+<h3>2.3 What stays per-crate (unchanged)</h3>
+<table>
+<tr><th>Crate</th><th>Stays local</th></tr>
+<tr><td><code>titan/&lt;product&gt;</code></td><td><code>trading_venue/protocol.rs</code> (one enum variant); <code>src/reflect.rs</code> (the whole adapter - <code>ReflectXVenue</code>, <code>FromAccount</code>, <code>TradingVenue</code>, <code>AddressLookupTableTrait</code> impls); <code>src/lib.rs</code> (now trivial: <code>pub mod reflect; pub use reflect::ReflectXVenue;</code> plus a <code>pub use reflect_titan_common::{trading_venue, account_caching};</code> re-export so downstream code's <code>crate::trading_venue::...</code> paths keep working, or callers switch to importing from <code>reflect_titan_common</code> directly)</td></tr>
+<tr><td><code>jupiter/&lt;product&gt;</code></td><td><code>ReflectXAmm</code> struct + its <code>Amm</code> impl (the only genuinely product-specific code); its own <code>Swap</code> tag additions live in the shared crate's <code>swap.rs</code>, but which tags a given product's <code>get_swap_and_account_metas</code> emits is still 100% local logic</td></tr>
+</table>
+<p>No change to the Reflect-side venue design (<code>LendingVenue</code>/<code>BondVenue</code>/<code>WhitelabelVenue</code> in <code>core/</code>) - this refactor is scoped strictly to the vendored third-party interface layer. It does not reopen or relitigate the earlier, separate decision to keep those venues concrete with no shared trait (that decision is about Reflect's own abstraction; this one is about not re-typing someone else's interface by hand three times).</p>
+
+<h2>3. Migration plan</h2>
+<ol>
+  <li>Create <code>titan/common</code>: <code>git mv titan/lending/src/trading_venue titan/common/src/trading_venue</code> minus <code>protocol.rs</code> (copy that one back into each product crate first, unmodified), same for <code>account_caching</code>. Add the crate to the workspace glob (already covered by <code>members = [..., "titan/*"]</code> if placed under <code>titan/</code>, or add it explicitly if it should sit outside that glob).</li>
+  <li>Update <code>titan/lending</code>, <code>titan/bonds</code>, <code>titan/whitelabel</code> Cargo.tomls to depend on <code>reflect-titan-common</code>; delete their local <code>trading_venue/{mod,bounds,error,token_info}.rs</code> and <code>account_caching/mod.rs</code>; update <code>src/lib.rs</code> and <code>src/reflect.rs</code> imports (<code>crate::trading_venue::*</code> → <code>reflect_titan_common::trading_venue::*</code>, same for <code>account_caching</code>).</li>
+  <li>Create <code>jupiter/common</code> the same way: move the shared prefix of <code>lib.rs</code> (through the <code>ClockRef</code> impls) and all of <code>swap.rs</code> except the trailing product tags, which get consolidated into the single enum per §2.2.</li>
+  <li>Update <code>jupiter/lending</code>, <code>jupiter/bonds</code>, <code>jupiter/whitelabel</code> Cargo.tomls to depend on <code>reflect-jupiter-common</code>; each crate's <code>lib.rs</code> shrinks to imports + its <code>ReflectXAmm</code> definition; delete the local <code>swap.rs</code> files (or reduce to a one-line re-export if any product wants to keep a local <code>Swap</code> alias for doc-friendliness).</li>
+  <li>Verify: <code>cargo build/test/clippy/fmt --workspace</code>, then re-run the LiteSVM parity suites (titan/lending's Kamino-backed suite, titan/bonds', titan/whitelabel's live-mainnet-.so suite) to confirm the import churn didn't silently change behavior. These are pure moves - no logic changes - so a green re-run is the whole verification bar.</li>
+  <li>rlp lands on top of the shared crates from day one - no fifth copy of the vendored files.</li>
+</ol>
+
+<h2>4. Why the vendoring exists at all (context, not up for debate here)</h2>
+<p>Both vendoring decisions are locked and this refactor does not touch them:</p>
+<ul>
+  <li><b>Jupiter:</b> <code>jupiter-amm-interface</code> v0.6.1 pulls solana 3.x/4.x split crates, ABI-incompatible with the solana 2.2 <code>Pubkey</code>/<code>Instruction</code> `reflect-sdk` is built on. The <code>Amm</code> trait + <code>Swap</code> enum are hand-copied to stay on 2.2. <code>ponytail:</code> drop the vendored copy and depend on the real crate once it ships a 2.2-compatible release (noted in every <code>swap.rs</code> module doc today).</li>
+  <li><b>Titan:</b> the <code>TradingVenue</code> trait is vendored from <code>Titan-Pathfinder/integration-template</code> because there is no published crate to depend on at all - the framework supplies its own <code>AccountsCache</code>, so the upstream RPC-backed cache helper is deliberately omitted too.</li>
+</ul>
+<p>This ticket is only about <i>where</i> the one-time copy lives - one shared internal crate vs. N per-product copies - not about removing the vendoring itself.</p>
+
+<h2>5. Sizing</h2>
+<table>
+<tr><th>Metric</th><th>Before</th><th>After</th></tr>
+<tr><td>Titan vendored lines shipped (3 products)</td><td>1557 (519 unique + 1038 duplicate)</td><td>519 (in <code>titan/common</code>) + ~30×3 (<code>protocol.rs</code>)</td></tr>
+<tr><td>Jupiter vendored lines shipped (3 products)</td><td>~780 (≈260 unique × 3, rough)</td><td>~260 (in <code>jupiter/common</code>) + small per-product deltas</td></tr>
+<tr><td>New crates</td><td>-</td><td>2 (<code>titan/common</code>, <code>jupiter/common</code>)</td></tr>
+<tr><td><code>Swap</code> types in existence</td><td>3, unrelated</td><td>1</td></tr>
+<tr><td>Cost of landing product #5</td><td>+519 (Titan) + ~260 (Jupiter) duplicate lines</td><td>+30 (<code>protocol.rs</code>) + a few tag lines</td></tr>
+</table>
+
+<h2>6. Out of scope / explicitly not doing</h2>
+<ul>
+  <li>Not touching <code>core/</code> (the concrete <code>LendingVenue</code>/<code>BondVenue</code>/<code>WhitelabelVenue</code> venues) - separate, already-settled decision.</li>
+  <li>Not adding a real dependency on <code>jupiter-amm-interface</code> - still blocked on upstream shipping a solana-2.2-compatible release.</li>
+  <li>Not building a generic Titan/Jupiter shim parameterized over "any Reflect venue" - that was tried and rejected before (see the routing-refactor-exploration history); this ticket only dedups the vendored interface layer, each product's adapter struct stays hand-written.</li>
+  <li>Not doing this as a drive-by inside an unrelated feature PR - it touches import lines in every existing adapter crate and deserves its own review.</li>
+</ul>
+
+<p class="muted" style="margin-top:3rem">Evidence for every claim above (line counts, empty diffs) was captured against <code>reflect-routing</code> <code>feat/refactor-routing-based-on-reflect-core-sdk</code> on 2026-07-07, immediately after landing <code>titan/whitelabel</code> + <code>jupiter/whitelabel</code>. Re-verify before executing if time has passed.</p>
+
+</main>
+</body>
+</html>

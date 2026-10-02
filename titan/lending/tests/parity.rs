@@ -1,0 +1,387 @@
+//! Off-chain `quote(amount)` must equal the on-chain execution delta, atom-exact,
+//! both directions, over an amount sweep. Both adapters delegate quote/build to
+//! the same `reflect-sdk` math, so executing the Titan venue's
+//! [`ReflectLendingVenue::generate_swap_instruction`] (a complete Reflect
+//! mint/redeem ix) proves the property for Titan AND Jupiter.
+//!
+//! The controller is not on mainnet: it is FORGED by `reflect_main`'s ix sequence
+//! over Mollusk in reflect-core — which pins solana 2.1 and CANNOT link with
+//! these 2.2 adapters — then dumped to `tests/fixtures/`. This harness loads that
+//! snapshot (a real, program-created Save obligation with a non-trivial
+//! position) plus the Save `.so` into one LiteSVM, drives the adapter's
+//! quote, re-executes the adapter-built ix in the SAME instance, and asserts the
+//! dest-balance delta equals the quote.
+//!
+//! The forge JSON and `reflect_main.so` are builds of a program that is not on
+//! mainnet yet, so they are NOT committed; the tests are `#[ignore]`d and run once
+//! the fixtures are regenerated locally.
+//!
+//! Regenerate the fixture (it also copies both `.so`s next to the JSON):
+//! `cd reflect-core/programs/reflect-main && DUMP_FORGE_SNAPSHOT=<this crate>/tests/fixtures/forged_reserve_save.json cargo test --test lending_forge_dump_tests`
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use litesvm::LiteSVM;
+use solana_account::Account;
+use solana_pubkey::Pubkey;
+use solana_sdk::clock::Clock as SolanaClock;
+use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::transaction::Transaction;
+
+use reflect_sdk::common::ids::{TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
+
+use reflect_titan_common::account_caching::{AccountCacheError, AccountsCache};
+use reflect_titan_common::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
+use reflect_titan_lending::ReflectLendingVenue;
+
+// Owner of the cached Save reserve in the snapshot; the forge copies its `.so`
+// next to the fixture.
+const SAVE_PROGRAM: &str = "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo";
+
+fn manifest_rel(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+}
+fn fixture_path() -> PathBuf {
+    manifest_rel("tests/fixtures/forged_reserve_save.json")
+}
+/// The committed program fixtures live here, next to the JSON snapshot.
+fn programs_dir() -> PathBuf {
+    manifest_rel("tests/fixtures/programs")
+}
+
+/// The program bytes needed to EXECUTE, resolved once and reused across the
+/// per-amount LiteSVM rebuilds.
+struct Programs {
+    reflect: Vec<u8>,
+    save: Vec<u8>,
+}
+
+fn program(file: &str) -> Vec<u8> {
+    let path = programs_dir().join(file);
+    std::fs::read(&path).unwrap_or_else(|_| panic!("missing committed fixture {} - see the header for regeneration; parity fixtures are mandatory", path.display()))
+}
+
+fn resolve_programs() -> Programs {
+    Programs { reflect: program("reflect_main.so"), save: program("save_program.so") }
+}
+
+/// Parsed fixture: the program id the controller is owned by, the controller
+/// PDA, the forge Clock, and every forged account keyed by pubkey.
+struct Snapshot {
+    program_id: Pubkey,
+    controller: Pubkey,
+    /// The anonymous user the forge opened Mint/Redeem to. LiteSVM verifies
+    /// the signature, so the secret is carried in the fixture.
+    user: Keypair,
+    clock: SolanaClock,
+    map: HashMap<Pubkey, Account>,
+}
+
+fn pk(s: &str) -> Pubkey {
+    s.parse().expect("pubkey")
+}
+
+/// Read `forged_reserve_save.json` (the cached-fixture JSON shape) into a
+/// [`Snapshot`]. Synthesizes the Clock sysvar account from the dumped slot/unix
+/// so the adapter's `update_state` (which fetches CLOCK_SYSVAR) resolves it.
+fn load_snapshot() -> Snapshot {
+    let raw = std::fs::read(fixture_path()).expect("read fixture");
+    let v: serde_json::Value = serde_json::from_slice(&raw).expect("parse fixture");
+
+    let program_id = pk(v["program_id"].as_str().unwrap());
+    let controller = pk(v["controller"].as_str().unwrap());
+    let user = Keypair::from_bytes(&B64.decode(v["user_secret"].as_str().unwrap()).unwrap()).expect("user keypair");
+    let clock = SolanaClock { slot: v["slot"].as_u64().unwrap(), unix_timestamp: v["unix"].as_i64().unwrap(), ..Default::default() };
+
+    let mut map = HashMap::new();
+    for rec in v["accounts"].as_array().unwrap() {
+        let key = pk(rec["pubkey"].as_str().unwrap());
+        let a = &rec["account"];
+        let data = B64.decode(a["data"][0].as_str().unwrap()).expect("b64");
+        map.insert(
+            key,
+            Account {
+                lamports: a["lamports"].as_u64().unwrap(),
+                data,
+                owner: pk(a["owner"].as_str().unwrap()),
+                executable: a["executable"].as_bool().unwrap(),
+                rent_epoch: a["rentEpoch"].as_u64().unwrap(),
+            },
+        );
+    }
+
+    // The forge never pushes the Clock sysvar into its account store; the
+    // adapter needs it for the quote timestamp. Synthesize it from the meta.
+    let clock_id = sdk_to_pk(&solana_sdk::sysvar::clock::ID);
+    map.insert(
+        clock_id,
+        Account { lamports: 1, data: bincode::serialize(&clock).expect("ser clock"), owner: sdk_to_pk(&solana_sdk::sysvar::id()), executable: false, rent_epoch: 0 },
+    );
+
+    Snapshot { program_id, controller, user, clock, map }
+}
+
+/// [`AccountsCache`] over the snapshot. Contract: order-preserving, miss → None.
+struct SnapshotCache {
+    map: HashMap<Pubkey, Account>,
+}
+
+#[async_trait]
+impl AccountsCache for SnapshotCache {
+    async fn get_account(&self, pubkey: &Pubkey) -> Result<Option<Account>, AccountCacheError> {
+        Ok(self.map.get(pubkey).cloned())
+    }
+    async fn get_accounts(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>, AccountCacheError> {
+        Ok(pubkeys.iter().map(|k| self.map.get(k).cloned()).collect())
+    }
+}
+
+// solana_account/solana_pubkey (adapter) and solana_sdk (litesvm) are the same
+// wire layout under unified 2.2, but distinct types; bridge by bytes regardless.
+fn sdk_key(k: &Pubkey) -> solana_sdk::pubkey::Pubkey {
+    solana_sdk::pubkey::Pubkey::new_from_array(k.to_bytes())
+}
+fn sdk_to_pk(k: &solana_sdk::pubkey::Pubkey) -> Pubkey {
+    Pubkey::new_from_array(k.to_bytes())
+}
+fn to_sdk_account(a: &Account) -> solana_sdk::account::Account {
+    solana_sdk::account::Account { lamports: a.lamports, data: a.data.clone(), owner: sdk_key(&a.owner), executable: a.executable, rent_epoch: a.rent_epoch }
+}
+
+/// A LiteSVM with the forged program + the Save program loaded and every
+/// non-program forged account set. The Clock is pinned to the forge slot so
+/// Save's reserve refresh sees the cached oracle as fresh.
+fn load_svm(snap: &Snapshot, p: &Programs) -> LiteSVM {
+    let mut svm = LiteSVM::new();
+    svm.add_program(sdk_key(&snap.program_id), &p.reflect);
+    svm.add_program(sdk_key(&pk(SAVE_PROGRAM)), &p.save);
+
+    // Programs are loaded above; everything else is plain forged state. Skip
+    // executable stubs (the loaders' program accounts) and the synthetic Clock
+    // (set via set_sysvar below for the runtime to honor it).
+    let clock_id = sdk_to_pk(&solana_sdk::sysvar::clock::ID);
+    for (k, acc) in &snap.map {
+        if acc.executable || *k == clock_id {
+            continue;
+        }
+        let _ = svm.set_account(sdk_key(k), to_sdk_account(acc));
+    }
+    svm.set_sysvar::<SolanaClock>(&snap.clock);
+    svm
+}
+
+/// Build the adapter swap ix, fund synthetic source/dest ATAs (source `u64::MAX`,
+/// dest `0`), execute in the SVM, and return the dest balance delta. The
+/// atom-exact comparison happens at the call site.
+#[allow(clippy::too_many_arguments)] // test sim: flat args beat a one-off params struct
+fn sim_delta(svm: &mut LiteSVM, venue: &ReflectLendingVenue, user: &Keypair, in_mint: Pubkey, out_mint: Pubkey, amount: u64, in_tp: Pubkey, out_tp: Pubkey) -> Option<u64> {
+    let req = QuoteRequest { input_mint: in_mint, output_mint: out_mint, amount, swap_type: SwapType::ExactIn };
+    let ix = match venue.generate_swap_instruction(req, sdk_to_pk(&user.pubkey())) {
+        Ok(ix) => ix,
+        Err(e) => {
+            eprintln!("[sim_delta] generate_swap_instruction failed amt {amount}: {e:?}");
+            return None;
+        },
+    };
+
+    let src_ata = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &sdk_key(&in_mint), &sdk_key(&in_tp));
+    let dst_ata = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &sdk_key(&out_mint), &sdk_key(&out_tp));
+    set_token_account(svm, src_ata, sdk_key(&in_mint), user.pubkey(), u64::MAX, in_tp);
+    set_token_account(svm, dst_ata, sdk_key(&out_mint), user.pubkey(), 0, out_tp);
+    svm.airdrop(&user.pubkey(), 1_000_000_000).ok()?;
+
+    let before = token_balance(svm, dst_ata)?;
+    let sdk_ix = solana_sdk::instruction::Instruction {
+        program_id: sdk_key(&ix.program_id),
+        accounts: ix.accounts.iter().map(|m| solana_sdk::instruction::AccountMeta { pubkey: sdk_key(&m.pubkey), is_signer: m.is_signer, is_writable: m.is_writable }).collect(),
+        data: ix.data.clone(),
+    };
+    // The Save CPIs (refresh reserve/obligation + deposit) blow past the 200k
+    // default; the forge ran at 1.4M. Match it.
+    let cu = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    let tx = Transaction::new_signed_with_payer(&[cu, sdk_ix], Some(&user.pubkey()), &[user], svm.latest_blockhash());
+    if let Err(e) = svm.send_transaction(tx) {
+        eprintln!("[sim_delta] tx failed amt {amount} {in_mint}->{out_mint}:");
+        for l in &e.meta.logs {
+            eprintln!("    {l}");
+        }
+        eprintln!("    err: {:?}", e.err);
+        return None;
+    }
+
+    let after = token_balance(svm, dst_ata)?;
+    Some(after.saturating_sub(before))
+}
+
+/// Write a minimal SPL token account (amount/mint/owner). Token-2022's base
+/// layout is byte-identical for these fields.
+fn set_token_account(svm: &mut LiteSVM, ata: solana_sdk::pubkey::Pubkey, mint: solana_sdk::pubkey::Pubkey, owner: solana_sdk::pubkey::Pubkey, amount: u64, token_program: Pubkey) {
+    use solana_program_pack::Pack;
+    let mut data = vec![0u8; spl_token::state::Account::LEN];
+    let state = spl_token::state::Account {
+        mint: spl_token::solana_program::pubkey::Pubkey::new_from_array(mint.to_bytes()),
+        owner: spl_token::solana_program::pubkey::Pubkey::new_from_array(owner.to_bytes()),
+        amount,
+        state: spl_token::state::AccountState::Initialized,
+        ..Default::default()
+    };
+    spl_token::state::Account::pack(state, &mut data).expect("pack token account");
+    let acc = solana_sdk::account::Account { lamports: 2_039_280, data, owner: sdk_key(&token_program), executable: false, rent_epoch: 0 };
+    let _ = svm.set_account(ata, acc);
+}
+
+fn token_balance(svm: &LiteSVM, ata: solana_sdk::pubkey::Pubkey) -> Option<u64> {
+    use solana_program_pack::Pack;
+    let acc = svm.get_account(&ata)?;
+    spl_token::state::Account::unpack(&acc.data).ok().map(|a| a.amount)
+}
+
+/// Build the venue from the forged controller account and `update_state` it off
+/// the snapshot. Returns the venue + snapshot + the (mint, token-program) pairs.
+async fn setup() -> (ReflectLendingVenue, Snapshot, (Pubkey, Pubkey), (Pubkey, Pubkey)) {
+    let snap = load_snapshot();
+    let ctrl = snap.map.get(&snap.controller).expect("controller in snapshot").clone();
+    let mut venue = ReflectLendingVenue::from_account(&snap.controller, &ctrl).expect("from_account");
+    let cache = SnapshotCache { map: snap.map.clone() };
+    venue.update_state(&cache).await.expect("update_state");
+
+    let toks = venue.get_token_info().to_vec();
+    assert_eq!(toks.len(), 2, "snapshot must yield a tradable venue");
+
+    let (deposit, receipt) = (&toks[0], &toks[1]);
+    let tp = |t22: bool| if t22 { TOKEN_2022_PROGRAM } else { TOKEN_PROGRAM };
+    (venue, snap, (deposit.pubkey, tp(deposit.is_token_2022)), (receipt.pubkey, tp(receipt.is_token_2022)))
+}
+
+/// Log-uniform amount sweep over `[lo, hi]`, `n` samples, deterministic seed.
+fn log_uniform_samples(lo: u64, hi: u64, n: usize) -> Vec<u64> {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(0x5EED_u64.wrapping_add(lo).wrapping_add(hi));
+    let (l, h) = ((lo.max(1) as f64).ln(), (hi.max(2) as f64).ln());
+    (0..n).map(|_| (rng.gen_range(l..=h)).exp() as u64).map(|x| x.clamp(lo, hi)).collect()
+}
+
+// Empirical safe bands for the forged cell (deposit_amount=1e9, controller cap
+// 1e15). MINT is atom-exact up to the cap, but `quote()` does NOT model the cap
+// (see `mint_quote_ignores_cap_above_mintable`), so the mint sweep stays a
+// safe margin below it. REDEEM is bounded by the SupplyFloor would_revert, which
+// `bounds(1,0)` finds correctly; tiny redeems revert on venue withdraw dust, so
+// the redeem sweep starts above a dust floor.
+const MINT_LO: u64 = 1_000;
+const MINT_HI: u64 = 1_000_000_000_000; // 1e12 — well under the 1e15 cap
+const REDEEM_LO: u64 = 1_000_000; // above the withdraw-dust revert threshold
+/// Units the venue unwind may shave off a redeem below its quote. The SDK
+/// conformance suite pins the same bound (reflect-core `lending_sdk_tests`).
+const REDEEM_DUST_TOL: u64 = 4;
+
+/// Mint: `delta == quote`, exact. Redeem: the quote is the program's withdrawal
+/// TARGET and a tight UPPER bound on the payout; the venue unwind (Save's
+/// liquidity -> collateral -> liquidity floor round-trip) may shave dust, so
+/// `quote - REDEEM_DUST_TOL <= delta <= quote`. Both directions, across the
+/// band endpoints + a log-uniform sweep (>=50 each).
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
+async fn parity_swept_both_directions() {
+    let programs = resolve_programs();
+    let (venue, snap, deposit, receipt) = setup().await;
+
+    // (in, out, lo, hi) per direction. Mint uses a fixed sub-cap band; redeem
+    // uses the venue's own (correct) would_revert ceiling from bounds(1,0).
+    let (rlo, rhi) = venue.bounds(1, 0).expect("redeem bounds");
+    let dirs = [(deposit.0, deposit.1, receipt.0, receipt.1, MINT_LO, MINT_HI), (receipt.0, receipt.1, deposit.0, deposit.1, REDEEM_LO.max(rlo), rhi.saturating_sub(rhi / 100))];
+
+    for (in_mint, in_tp, out_mint, out_tp, lo, hi) in dirs {
+        let mut amounts = vec![lo, hi];
+        amounts.extend(log_uniform_samples(lo, hi, 50));
+        for amt in amounts {
+            let q = venue.quote(QuoteRequest { input_mint: in_mint, output_mint: out_mint, amount: amt, swap_type: SwapType::ExactIn }).expect("quote");
+            assert!(!q.not_enough_liquidity, "amount {amt} unexpectedly outside the routable band {lo}..={hi}");
+            let mut svm = load_svm(&snap, &programs);
+            let delta = sim_delta(&mut svm, &venue, &snap.user, in_mint, out_mint, amt, in_tp, out_tp).expect("simulate");
+            if in_mint == deposit.0 {
+                assert_eq!(delta, q.expected_output, "atom-exact mint parity broke: amount {amt}: quote {} sim {delta}", q.expected_output);
+            } else {
+                assert!(delta <= q.expected_output, "redeem paid MORE than quoted: amount {amt}: quote {} sim {delta}", q.expected_output);
+                assert!(q.expected_output - delta <= REDEEM_DUST_TOL, "redeem dust past tolerance: amount {amt}: quote {} sim {delta}", q.expected_output);
+            }
+        }
+    }
+}
+
+/// mint → redeem ≈ identity within rounding tolerance (~1%). Quote-only — runs
+/// from the committed fixture, no `.so`s needed.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
+async fn parity_roundtrip_identity() {
+    let (venue, _snap, deposit, receipt) = setup().await;
+    let amount = 100_000_000u64; // 100 USDC — mid of both directions' valid bands
+
+    let q1 = venue.quote(QuoteRequest { input_mint: deposit.0, output_mint: receipt.0, amount, swap_type: SwapType::ExactIn }).expect("mint quote");
+    assert!(q1.expected_output > 0);
+    let q2 = venue.quote(QuoteRequest { input_mint: receipt.0, output_mint: deposit.0, amount: q1.expected_output, swap_type: SwapType::ExactIn }).expect("redeem quote");
+
+    let diff = (amount as i64 - q2.expected_output as i64).unsigned_abs();
+    assert!(diff <= amount / 100, "roundtrip drifted >1%: {amount} -> {} -> {} (diff {diff})", q1.expected_output, q2.expected_output);
+}
+
+/// Edges: amount 0 → clean 0 (never panics); and a REDEEM worth more than the
+/// vault surfaces `not_enough_liquidity` (the adapter's would_revert path).
+/// Quote-only.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
+async fn edges_zero_and_redeem_floor() {
+    let (venue, _snap, deposit, receipt) = setup().await;
+    for (a, b) in [(deposit.0, receipt.0), (receipt.0, deposit.0)] {
+        let z = venue.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 0, swap_type: SwapType::ExactIn }).expect("zero quote");
+        assert_eq!(z.expected_output, 0);
+        assert!(!z.not_enough_liquidity, "amount 0 is not a liquidity failure");
+    }
+
+    // A burn worth more than the vault underflows on chain → would_revert →
+    // not_enough_liquidity. The ceiling lives at bounds(1,0).hi.
+    let (_, rhi) = venue.bounds(1, 0).expect("redeem bounds");
+    let over = venue.quote(QuoteRequest { input_mint: receipt.0, output_mint: deposit.0, amount: rhi.saturating_mul(4), swap_type: SwapType::ExactIn }).expect("over quote");
+    assert!(over.not_enough_liquidity, "redeem past the vault must report no liquidity");
+}
+
+/// MINT cap parity: above the strategy mint cap the adapter quote now reports
+/// `not_enough_liquidity` (the SDK mirrors `validate_cap_limits`:
+/// `receipt_supply + receipt_out <= base.cap`), AND on-chain `mint_lending`
+/// reverts `CapExceeded`. Quote and execution AGREE at the cap — no
+/// over-promise. (Previously the quote over-promised; SDK fix in
+/// `LendingQuoteCtx::quote_mint`.)
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
+async fn mint_quote_caps_above_mintable() {
+    let programs = resolve_programs();
+    let (venue, snap, deposit, receipt) = setup().await;
+    let over_cap = 2_000_000_000_000_000u64; // 2× the 1e15 controller cap
+
+    let q = venue.quote(QuoteRequest { input_mint: deposit.0, output_mint: receipt.0, amount: over_cap, swap_type: SwapType::ExactIn }).expect("quote");
+    assert!(q.not_enough_liquidity, "over-cap mint quote must report no liquidity (cap modeled)");
+    assert_eq!(q.expected_output, 0, "no-liquidity quote outputs 0");
+
+    // …and execution reverts CapExceeded — sim_delta returns None. Quote agrees.
+    let mut svm = load_svm(&snap, &programs);
+    let sim = sim_delta(&mut svm, &venue, &snap.user, deposit.0, receipt.0, over_cap, deposit.1, receipt.1);
+    assert!(sim.is_none(), "over-cap mint must revert on-chain");
+}
+
+/// Offline: the SnapshotCache honors the order/missing contract with no .so/fixture.
+#[tokio::test(flavor = "current_thread")]
+async fn offline_snapshot_cache_contract() {
+    let a = Pubkey::new_unique();
+    let b = Pubkey::new_unique();
+    let mut map = HashMap::new();
+    map.insert(a, Account { lamports: 1, data: vec![], owner: Pubkey::default(), executable: false, rent_epoch: 0 });
+    let cache = SnapshotCache { map };
+
+    let got = cache.get_accounts(&[a, b]).await.unwrap();
+    assert_eq!(got.len(), 2);
+    assert!(got[0].is_some());
+    assert!(got[1].is_none(), "missing account must be Ok(None), not an error");
+    assert!(cache.get_account(&b).await.unwrap().is_none());
+}

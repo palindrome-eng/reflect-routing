@@ -1,0 +1,11 @@
+[package]
+name = "reflect-routing-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Reflect lending venue logic; aggregator shims wrap it."
+
+[dependencies]
+reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git", tag = "v0.13.0" }
+solana-pubkey = "2.2"
+solana-instruction = "2.2"
+anyhow = "1"

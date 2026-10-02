@@ -1,0 +1,26 @@
+# Reflect Core - rustfmt configuration
+
+edition = "2021"
+max_width = 180
+tab_spaces = 4
+hard_tabs = false
+
+# Controls when rustfmt breaks expressions across lines.
+# "Max" means "keep things on one line as much as possible" — it raises the
+# thresholds for function args, struct literals, array literals, and chains
+# before forcing a line break.
+#
+# What it changes (all set to max_width = 140):
+#   fn_call_width:        60  → 140  (function call args)
+#   attr_fn_like_width:   70  → 140  (attribute macro args)
+#   struct_lit_width:     18  → 140  (struct literal fields)
+#   struct_variant_width: 35  → 140  (struct variant fields)
+#   array_width:          60  → 140  (array literals)
+#   chain_width:          60  → 140  (method chains)
+use_small_heuristics = "Max"
+
+match_block_trailing_comma = true
+# Sorts use statements alphabetically within each group.
+reorder_imports = true
+# Sorts mod declarations alphabetically.
+reorder_modules = true

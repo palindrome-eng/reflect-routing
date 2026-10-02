@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+
+# `core` holds the shared venue logic (concrete LendingVenue: account plumbing +
+# reflect-sdk delegation) every aggregator shim wraps. One crate per (aggregator,
+# program) cell: <aggregator>/<program>. The program axis grows lending -> bonds
+# -> rlp -> whitelabel; the aggregator axis grows jupiter -> titan -> next. A new
+# cell is a new directory the glob picks up.
+members = ["core", "jupiter/*", "titan/*"]
+
+# amm_reflect is the legacy Jupiter integration (rides the deprecated
+# reflect-exchange-rates), superseded by jupiter/lending and kept out of the
+# workspace until it can be deleted. ponytail: delete amm_reflect once jupiter/lending lands.
+exclude = ["amm_reflect"]

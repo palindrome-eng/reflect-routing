@@ -51,3 +51,20 @@ cargo test -- --nocapture
 ```
 
 Tests will skip gracefully if controller account data is unavailable or invalid.
+## Listing contract (rlp and whitelabel markets)
+
+The Jupiter and Titan shims in `jupiter/*` and `titan/*` list one market per account.
+The account's owner selects the deployment (mainnet or staging program id); the venue re-checks it against the fetched bytes.
+
+**rlp** (`jupiter/rlp`, `titan/rlp`): the market is a `LiquidityPool` PDA.
+The lister injects the pool's asset mints (`params.asset_mints` on Jupiter, the constructor on Titan): the pool lists registry indices and the `Asset` PDA is keyed by mint, so they cannot be read off the pool alone.
+The injected set must be exactly the pool's assets, or `load` fails and the market must be re-listed.
+Every asset must be `Public` and banded (`update_oracle` has set `FLAG_CHAIN_RESOLVED`).
+Routes are asset -> LP (deposit) and asset -> asset (swap); LP as input is the cooldown withdrawal and never routes.
+`Action::Swap` must be assigned `Role::Public` for asset -> asset routes to clear; on mainnet prod it is crank-only, so only deposits route there.
+The swap fee (`swap_fee_bps`, after price impact) is reported in the output mint; deposits charge none.
+
+**whitelabel** (`jupiter/whitelabel`, `titan/whitelabel`): the market is a `ProxyState` PDA.
+Discovery takes three rounds (state -> its `Asset` -> vault, mints and every oracle leg).
+The asset must be active and its oracle chain resolved, or `load` fails.
+Routes are stablecoin -> branded (wrap) and branded -> stablecoin (unwrap); the fee is always 0 because the crank folds it into pricing.
