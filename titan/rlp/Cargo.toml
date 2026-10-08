@@ -7,7 +7,7 @@ description = "Reflect rlp insurance pool as a Titan TradingVenue, built on refl
 [dependencies]
 reflect-routing-core = { path = "../../core" }
 reflect-titan-common = { path = "../common" }
-reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git", tag = "v0.13.0" }
+reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-sdk", tag = "v0.14.0" }
 
 # the vendored TradingVenue trait lives in reflect-titan-common; this crate
 # only needs the account/instruction types its own reflect.rs touches.
@@ -18,14 +18,9 @@ solana-account = "2.2"
 solana-instruction = "2.2"
 
 # parity.rs proves quote==execution atom-exact against the DUMPED mainnet rlp
-# program over a mainnet snapshot (deposit), and against the oracle-stacking
-# build bootstrapped through its own admin instructions (deposit + swap). The
-# fixtures are committed under tests/fixtures (SOURCES.md); a missing fixture
-# FAILS the test.
+# program over a mainnet snapshot of pool 4. The fixtures are committed under
+# tests/fixtures (SOURCES.md); a missing fixture FAILS the test.
 [dev-dependencies]
-# The parity and drift suites bootstrap a pool through the admin builders; the shipped
-# library stays on the user-flow surface.
-reflect-sdk = { package = "reflect-core-sdk", git = "https://github.com/palindrome-eng/reflect-core-sdk.git", tag = "v0.13.0", features = ["operator"] }
 reflect-titan-common = { path = "../common", features = ["harness"] }
 litesvm = "=0.6.1"
 solana-sdk = "2.2"

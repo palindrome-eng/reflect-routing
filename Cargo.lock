@@ -2173,10 +2173,10 @@ dependencies = [
 
 [[package]]
 name = "reflect-core-sdk"
-version = "0.13.0"
-source = "git+https://github.com/palindrome-eng/reflect-core-sdk.git?tag=v0.13.0#1f6748eabba6564e0ef326cf8bba0fcd611767be"
+version = "0.14.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#0edec041990bcce0531ac918e46c4c3d8a2a8b4c"
 dependencies = [
- "reflect-protocol-core",
+ "reflect-kernel",
  "solana-program",
 ]
 
@@ -2247,9 +2247,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "reflect-protocol-core"
-version = "0.14.0"
-source = "git+https://github.com/palindrome-eng/reflect-protocol-core.git?tag=v0.14.0#0fdb86704e46b23ab35c1ba9b26a8cca1bf8351e"
+name = "reflect-kernel"
+version = "0.15.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#0edec041990bcce0531ac918e46c4c3d8a2a8b4c"
 dependencies = [
  "uint",
 ]
