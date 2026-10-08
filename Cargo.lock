@@ -2172,11 +2172,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reflect-core"
+version = "0.15.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#d31d1593deefa3f33845dea3a0eb91cb93733ca9"
+dependencies = [
+ "uint",
+]
+
+[[package]]
 name = "reflect-core-sdk"
 version = "0.14.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#0edec041990bcce0531ac918e46c4c3d8a2a8b4c"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#d31d1593deefa3f33845dea3a0eb91cb93733ca9"
 dependencies = [
- "reflect-kernel",
+ "reflect-core",
  "solana-program",
 ]
 
@@ -2244,14 +2252,6 @@ dependencies = [
  "serde_json",
  "solana-sdk",
  "tokio",
-]
-
-[[package]]
-name = "reflect-kernel"
-version = "0.15.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#0edec041990bcce0531ac918e46c4c3d8a2a8b4c"
-dependencies = [
- "uint",
 ]
 
 [[package]]
