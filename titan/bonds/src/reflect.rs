@@ -11,7 +11,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::{TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
-use reflect_sdk::common::Clock;
+use reflect_sdk::common::Now;
 
 use reflect_routing_core::{BondVenue, MintInfo};
 
@@ -42,7 +42,7 @@ fn to_token_info(m: MintInfo) -> TokenInfo {
 /// [`BondVenue`] presented as a Titan venue.
 pub struct ReflectBondVenue {
     venue: BondVenue,
-    clock: Clock,
+    clock: Now,
     /// Advisory fetch set surfaced to the framework: seeds before load, the full
     /// discovery set after.
     keys: Vec<Pubkey>,
@@ -55,7 +55,7 @@ impl FromAccount for ReflectBondVenue {
     fn from_account(pubkey: &Pubkey, account: &Account) -> Result<Self, TradingVenueError> {
         let venue = BondVenue::from_market(*pubkey, account.owner);
         let keys = venue.seeds();
-        Ok(Self { venue, clock: Clock { slot: 0, unix: 0 }, keys, tokens: vec![], loaded: false })
+        Ok(Self { venue, clock: Now { slot: 0, unix_timestamp: 0 }, keys, tokens: vec![], loaded: false })
     }
 }
 
@@ -100,7 +100,7 @@ impl TradingVenue for ReflectBondVenue {
         let multiocular = base[2].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[2].into()))?;
         let token_registry = base[3].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[3].into()))?;
         let clock_acc = base[4].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(CLOCK_SYSVAR.into()))?;
-        self.clock = Clock::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
+        self.clock = Now::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
 
         // the venue derives the full set from the seed bytes; fetch it and
         // hand it back for loading.

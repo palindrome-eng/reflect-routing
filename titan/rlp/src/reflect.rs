@@ -12,7 +12,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
-use reflect_sdk::common::Clock;
+use reflect_sdk::common::Now;
 
 use reflect_routing_core::{MintInfo, RlpVenue};
 
@@ -43,7 +43,7 @@ fn to_token_info(m: MintInfo) -> TokenInfo {
 /// [`RlpVenue`] presented as a Titan venue.
 pub struct ReflectRlpVenue {
     venue: RlpVenue,
-    clock: Clock,
+    clock: Now,
     /// Advisory fetch set surfaced to the framework: seeds before load, the
     /// full discovery set after.
     keys: Vec<Pubkey>,
@@ -61,7 +61,7 @@ impl ReflectRlpVenue {
     pub fn new(program_id: Pubkey, pool: Pubkey, asset_mints: Vec<Pubkey>) -> Self {
         let venue = RlpVenue::from_market(program_id, pool, asset_mints);
         let keys = venue.seeds();
-        Self { venue, clock: Clock { slot: 0, unix: 0 }, keys, tokens: vec![], loaded: false }
+        Self { venue, clock: Now { slot: 0, unix_timestamp: 0 }, keys, tokens: vec![], loaded: false }
     }
 }
 
@@ -113,7 +113,7 @@ impl TradingVenue for ReflectRlpVenue {
             accs.push(a.ok_or_else(|| TradingVenueError::NoAccountFound((*k).into()))?);
         }
         let clock_acc = accs.pop().expect("clock pushed above");
-        self.clock = Clock::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
+        self.clock = Now::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
 
         // Round 2: the Asset PDA bytes sit at seed slots 2.., and name the
         // oracle leg accounts.

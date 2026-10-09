@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
-use reflect_sdk::common::Clock;
+use reflect_sdk::common::Now;
 use reflect_sdk::rlp::{asset_keys, decode_asset_registry, pda, state_keys, AssetView, FetchedAccount, LiquidityPoolView, PoolAccounts};
 use reflect_sdk::strategy::MintInfo;
 
@@ -179,7 +179,7 @@ impl RlpVenue {
     ///
     /// # Errors
     /// If the venue isn't loaded or the mint pair doesn't classify.
-    pub fn quote(&self, input_mint: Pubkey, output_mint: Pubkey, amount: u64, clock: Clock) -> Result<Option<RouteQuote>> {
+    pub fn quote(&self, input_mint: Pubkey, output_mint: Pubkey, amount: u64, clock: Now) -> Result<Option<RouteQuote>> {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
@@ -193,7 +193,7 @@ impl RlpVenue {
     /// # Errors
     /// If the venue isn't loaded, the mint pair doesn't classify, or the SDK
     /// refuses the quote the build embeds.
-    pub fn build(&self, user: Pubkey, input_mint: Pubkey, output_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Clock) -> Result<Instruction> {
+    pub fn build(&self, user: Pubkey, input_mint: Pubkey, output_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Now) -> Result<Instruction> {
         let h = self.loaded()?.pool(user);
         let (_q, built) = match self.route(input_mint, output_mint)? {
             RlpRoute::Deposit => h.deposit(input_mint, amount, slippage_bps, clock.into()).map_err(|e| anyhow!("deposit: {e:?}"))?,
@@ -216,7 +216,7 @@ mod tests {
         pub const ASSET: [u8; 8] = [234, 180, 241, 252, 139, 224, 160, 8];
     }
 
-    const NOW: Clock = Clock { slot: 500_000, unix: 1_800_000_000 };
+    const NOW: Now = Now { slot: 500_000, unix_timestamp: 1_800_000_000 };
 
     fn pk(seed: u8) -> Pubkey {
         Pubkey::new_from_array([seed; 32])
@@ -282,7 +282,7 @@ mod tests {
         b[73..81].copy_from_slice(&price.to_le_bytes());
         b[81..89].copy_from_slice(&(price as u64 / 1_000).to_le_bytes());
         b[89..93].copy_from_slice(&exponent.to_le_bytes());
-        b[93..101].copy_from_slice(&(NOW.unix - 30).to_le_bytes());
+        b[93..101].copy_from_slice(&(NOW.unix_timestamp - 30).to_le_bytes());
         b[125..133].copy_from_slice(&(NOW.slot - 30).to_le_bytes());
         b
     }
@@ -426,7 +426,7 @@ mod tests {
         let (_, lp_token, accounts) = genesis(a, b, false);
         let v = loaded(a, b, accounts.clone());
         // Stale Pyth leg (120 s window on the prod build).
-        let late = Clock { unix: NOW.unix + 200, ..NOW };
+        let late = Now { unix_timestamp: NOW.unix_timestamp + 200, ..NOW };
         assert!(v.quote(a, lp_token, 1_000_000, late).unwrap().is_none());
         // Swap output rounding to zero (1 atom of a $1 asset into a $2 asset).
         assert!(v.quote(a, b, 1, NOW).unwrap().is_none());

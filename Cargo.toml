@@ -12,3 +12,7 @@ members = ["core", "jupiter/*", "titan/*"]
 # reflect-exchange-rates), superseded by jupiter/lending and kept out of the
 # workspace until it can be deleted. ponytail: delete amm_reflect once jupiter/lending lands.
 exclude = ["amm_reflect"]
+
+# The one place the public SDK is pinned; every cell inherits it.
+[workspace.dependencies]
+reflect-sdk = { git = "https://github.com/palindrome-eng/reflect-sdk", tag = "v0.16.0-rc.1" }

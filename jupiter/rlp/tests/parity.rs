@@ -24,7 +24,7 @@ use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::pubkey::Pubkey;
 
 use reflect_routing_core::{RlpRoute, RlpVenue};
-use reflect_sdk::common::Clock as ReflectClock;
+use reflect_sdk::common::Now as ReflectClock;
 use reflect_sdk::rlp::ids::{PYTH_RECEIVER, RLP_PROGRAM};
 use reflect_sdk::rlp::{pda, Action, OracleProvider, Role};
 
@@ -175,7 +175,7 @@ fn core_venue(fx: &Fixture) -> RlpVenue {
 }
 
 fn reflect_clock(clock: &ClockRef) -> ReflectClock {
-    ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix: clock.unix_timestamp.load(Ordering::Relaxed) }
+    ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix_timestamp: clock.unix_timestamp.load(Ordering::Relaxed) }
 }
 
 /// The Jupiter adapter's quote must equal the shared `RlpVenue` quote, over

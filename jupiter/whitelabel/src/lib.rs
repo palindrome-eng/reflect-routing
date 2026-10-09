@@ -15,7 +15,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, Quote, QuoteParams, Swap, SwapAndAccountMetas, SwapParams};
 use reflect_routing_core::{WhitelabelRoute, WhitelabelVenue};
-use reflect_sdk::common::Clock as ReflectClock;
+use reflect_sdk::common::Now as ReflectClock;
 
 /// [`WhitelabelVenue`] presented as a Jupiter market. One seed account (the
 /// `ProxyState` itself carries both mints); its `Asset` names the oracle
@@ -30,7 +30,7 @@ pub struct ReflectWhitelabelAmm {
 
 impl ReflectWhitelabelAmm {
     fn clock(&self) -> ReflectClock {
-        ReflectClock { slot: self.clock_ref.slot.load(Ordering::Relaxed), unix: self.clock_ref.unix_timestamp.load(Ordering::Relaxed) }
+        ReflectClock { slot: self.clock_ref.slot.load(Ordering::Relaxed), unix_timestamp: self.clock_ref.unix_timestamp.load(Ordering::Relaxed) }
     }
 }
 

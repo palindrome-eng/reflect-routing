@@ -14,7 +14,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
-use reflect_sdk::common::Clock;
+use reflect_sdk::common::Now;
 use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
 
 pub use bonds::BondVenue;
@@ -115,7 +115,7 @@ impl LendingVenue {
     ///
     /// # Errors
     /// If the venue isn't loaded, or the SDK quote call fails (malformed state).
-    pub fn quote(&self, input_mint: Pubkey, amount: u64, clock: Clock) -> Result<Option<RouteQuote>> {
+    pub fn quote(&self, input_mint: Pubkey, amount: u64, clock: Now) -> Result<Option<RouteQuote>> {
         // Zero input is a hard contract: clean 0, never panic or error. Lending is
         // one pair; the SDK dispatches mint/redeem on the input mint alone.
         if amount == 0 {
@@ -132,7 +132,7 @@ impl LendingVenue {
     ///
     /// # Errors
     /// If the venue isn't loaded, or the SDK's mint/redeem build fails.
-    pub fn build(&self, user: Pubkey, input_mint: Pubkey, amount: u64, slippage_bps: u16, headroom: u64, clock: Clock) -> Result<Instruction> {
+    pub fn build(&self, user: Pubkey, input_mint: Pubkey, amount: u64, slippage_bps: u16, headroom: u64, clock: Now) -> Result<Instruction> {
         let accts = self.loaded()?;
         let pair = self.pair.as_ref().context("no tradable pair")?;
         let h = accts.lending(user, pair.deposit.pubkey, pair.deposit.token_program).map_err(|e| anyhow!("lending: {e:?}"))?;
@@ -156,9 +156,9 @@ mod tests {
         let v = LendingVenue::from_market(Pubkey::new_unique(), Pubkey::new_unique());
         assert!(v.mints().is_empty());
         // Zero input is routable-with-zero-output, never an error, even unloaded.
-        let z = v.quote(Pubkey::new_unique(), 0, Clock { slot: 0, unix: 0 }).unwrap();
+        let z = v.quote(Pubkey::new_unique(), 0, Now { slot: 0, unix_timestamp: 0 }).unwrap();
         assert!(matches!(z, Some(RouteQuote { amount_out: 0, .. })));
         // A real amount on an unloaded venue is an error (nothing cached).
-        assert!(v.quote(Pubkey::new_unique(), 1, Clock { slot: 0, unix: 0 }).is_err());
+        assert!(v.quote(Pubkey::new_unique(), 1, Now { slot: 0, unix_timestamp: 0 }).is_err());
     }
 }

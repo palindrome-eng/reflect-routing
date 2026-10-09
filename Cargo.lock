@@ -2172,31 +2172,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "reflect-core"
-version = "0.15.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#d31d1593deefa3f33845dea3a0eb91cb93733ca9"
-dependencies = [
- "uint",
-]
-
-[[package]]
-name = "reflect-core-sdk"
-version = "0.14.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.14.0#d31d1593deefa3f33845dea3a0eb91cb93733ca9"
-dependencies = [
- "reflect-core",
- "solana-program",
-]
-
-[[package]]
 name = "reflect-jupiter-bonds"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "reflect-core-sdk",
  "reflect-jupiter-common",
  "reflect-routing-core",
+ "reflect-sdk",
  "serde_json",
  "solana-sdk",
  "tokio",
@@ -2218,9 +2201,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "reflect-core-sdk",
  "reflect-jupiter-common",
  "reflect-routing-core",
+ "reflect-sdk",
  "serde_json",
  "solana-sdk",
  "tokio",
@@ -2232,9 +2215,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "reflect-core-sdk",
  "reflect-jupiter-common",
  "reflect-routing-core",
+ "reflect-sdk",
  "serde_json",
  "solana-sdk",
  "tokio",
@@ -2246,9 +2229,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "reflect-core-sdk",
  "reflect-jupiter-common",
  "reflect-routing-core",
+ "reflect-sdk",
  "serde_json",
  "solana-sdk",
  "tokio",
@@ -2259,9 +2242,30 @@ name = "reflect-routing-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "reflect-core-sdk",
+ "reflect-sdk",
  "solana-instruction",
  "solana-pubkey",
+]
+
+[[package]]
+name = "reflect-sdk"
+version = "0.16.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.16.0-rc.1#0afbafda166f5f13838cd55fad926ed122a0a905"
+dependencies = [
+ "reflect-sdk-core",
+ "solana-account-info",
+ "solana-cpi",
+ "solana-instruction",
+ "solana-program-error",
+ "solana-pubkey",
+]
+
+[[package]]
+name = "reflect-sdk-core"
+version = "0.16.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.16.0-rc.1#0afbafda166f5f13838cd55fad926ed122a0a905"
+dependencies = [
+ "uint",
 ]
 
 [[package]]
@@ -2272,8 +2276,8 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "litesvm",
- "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-sdk",
  "reflect-titan-common",
  "serde_json",
  "solana-account",
@@ -2315,8 +2319,8 @@ dependencies = [
  "bincode",
  "litesvm",
  "rand 0.8.6",
- "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-sdk",
  "reflect-titan-common",
  "serde_json",
  "solana-account",
@@ -2336,8 +2340,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "litesvm",
- "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-sdk",
  "reflect-titan-common",
  "solana-account",
  "solana-instruction",
@@ -2353,8 +2357,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "litesvm",
- "reflect-core-sdk",
  "reflect-routing-core",
+ "reflect-sdk",
  "reflect-titan-common",
  "solana-account",
  "solana-instruction",

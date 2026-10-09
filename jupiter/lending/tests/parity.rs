@@ -23,7 +23,7 @@ use solana_sdk::account::Account;
 use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::pubkey::Pubkey;
 
-use reflect_sdk::common::Clock as ReflectClock;
+use reflect_sdk::common::Now as ReflectClock;
 use reflect_sdk::strategy::{pda, FetchedAccount, StrategyAccounts};
 
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
@@ -103,7 +103,7 @@ fn sdk_quote(snap: &Snapshot, input_mint: Pubkey, amount: u64, clock: &ClockRef)
     let keys = reflect_sdk::strategy::lending_discovery_keys(&ctrl.data, &reg.data, &pid).unwrap();
     let bytes: Vec<FetchedAccount> = keys.iter().filter_map(|k| snap.map.get(k).map(|a| FetchedAccount { key: *k, owner: a.owner, data: a.data.clone() })).collect();
     let accts = StrategyAccounts::from_controller(&pid, &snap.controller, bytes).unwrap();
-    let rc = ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix: clock.unix_timestamp.load(Ordering::Relaxed) };
+    let rc = ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix_timestamp: clock.unix_timestamp.load(Ordering::Relaxed) };
     accts.quote_by_mints(input_mint, amount, rc).unwrap().amount_out
 }
 

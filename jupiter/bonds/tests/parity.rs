@@ -27,7 +27,7 @@ use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::pubkey::Pubkey;
 
 use reflect_routing_core::{BondVenue, IndexRoute};
-use reflect_sdk::common::Clock as ReflectClock;
+use reflect_sdk::common::Now as ReflectClock;
 
 use reflect_jupiter_bonds::ReflectBondsAmm;
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
@@ -112,7 +112,7 @@ fn core_venue(snap: &Snapshot) -> BondVenue {
 }
 
 fn reflect_clock(clock: &ClockRef) -> ReflectClock {
-    ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix: clock.unix_timestamp.load(Ordering::Relaxed) }
+    ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix_timestamp: clock.unix_timestamp.load(Ordering::Relaxed) }
 }
 
 /// The Jupiter adapter's quote must equal the shared BondVenue quote (= Titan's,

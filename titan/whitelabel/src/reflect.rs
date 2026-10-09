@@ -10,7 +10,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::{TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
-use reflect_sdk::common::Clock;
+use reflect_sdk::common::Now;
 
 use reflect_routing_core::{MintInfo, WhitelabelVenue};
 
@@ -40,7 +40,7 @@ fn to_token_info(m: MintInfo) -> TokenInfo {
 /// [`WhitelabelVenue`] presented as a Titan venue.
 pub struct ReflectWhitelabelVenue {
     venue: WhitelabelVenue,
-    clock: Clock,
+    clock: Now,
     /// Advisory fetch set surfaced to the framework: the seed before load,
     /// the full discovery set after.
     keys: Vec<Pubkey>,
@@ -55,7 +55,7 @@ impl FromAccount for ReflectWhitelabelVenue {
         // staging proxy); `WhitelabelVenue::load` re-checks it.
         let venue = WhitelabelVenue::from_market(account.owner, *pubkey);
         let keys = venue.seeds();
-        Ok(Self { venue, clock: Clock { slot: 0, unix: 0 }, keys, tokens: vec![], loaded: false })
+        Ok(Self { venue, clock: Now { slot: 0, unix_timestamp: 0 }, keys, tokens: vec![], loaded: false })
     }
 }
 
@@ -96,7 +96,7 @@ impl TradingVenue for ReflectWhitelabelVenue {
         let base = cache.get_accounts(&p1).await?;
         let market = base[0].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(seeds[0].into()))?;
         let clock_acc = base[1].as_ref().ok_or_else(|| TradingVenueError::NoAccountFound(CLOCK_SYSVAR.into()))?;
-        self.clock = Clock::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
+        self.clock = Now::from_sysvar_bytes(&clock_acc.data).map_err(venue_err)?;
 
         // Round 2: the Asset the state names carries the oracle leg keys.
         let asset_key = self.venue.asset_key(&market.data).map_err(venue_err)?;

@@ -13,7 +13,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, Quote, QuoteParams, Swap, SwapAndAccountMetas, SwapParams};
 use reflect_routing_core::{BondVenue, IndexRoute};
-use reflect_sdk::common::Clock as ReflectClock;
+use reflect_sdk::common::Now as ReflectClock;
 
 /// [`BondVenue`] presented as a Jupiter market. Bonds need 4 seed accounts
 /// (controller, asset_registry, multiocular, token_registry - [`BondVenue::seeds`]
@@ -28,7 +28,7 @@ pub struct ReflectBondsAmm {
 
 impl ReflectBondsAmm {
     fn clock(&self) -> ReflectClock {
-        ReflectClock { slot: self.clock_ref.slot.load(Ordering::Relaxed), unix: self.clock_ref.unix_timestamp.load(Ordering::Relaxed) }
+        ReflectClock { slot: self.clock_ref.slot.load(Ordering::Relaxed), unix_timestamp: self.clock_ref.unix_timestamp.load(Ordering::Relaxed) }
     }
 }
 
