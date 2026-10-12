@@ -15,4 +15,4 @@ exclude = ["amm_reflect"]
 
 # The one place the public SDK is pinned; every cell inherits it.
 [workspace.dependencies]
-reflect-sdk = { git = "https://github.com/palindrome-eng/reflect-sdk", tag = "v0.16.0-rc.1" }
+reflect-sdk = { git = "https://github.com/palindrome-eng/reflect-sdk", tag = "v0.17.0" }
