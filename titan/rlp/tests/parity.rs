@@ -17,7 +17,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
 use reflect_sdk::rlp::ids::RLP_PROGRAM;
-use reflect_sdk::rlp::{pda, AssetView, LiquidityPoolView};
+use reflect_sdk::rlp::{AssetView, LiquidityPoolView};
 
 use reflect_titan_common::harness::*;
 use reflect_titan_common::trading_venue::{QuoteRequest, SwapType, TradingVenue};
@@ -25,10 +25,6 @@ use reflect_titan_rlp::ReflectRlpVenue;
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
-fn settings() -> Pubkey {
-    pda::derive_settings(&RLP_PROGRAM).0
 }
 
 /// The venue over the live SVM state (the clock sysvar included).

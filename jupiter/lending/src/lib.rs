@@ -99,8 +99,8 @@ impl Amm for ReflectLendingAmm {
     fn get_swap_and_account_metas(&self, sp: &SwapParams) -> Result<SwapAndAccountMetas> {
         // Jupiter takes ONLY the account list: its on-chain program writes the
         // instruction data (amount, min_out) from the route context, so build with
-        // slippage 0 / headroom 0 - the serialized data is discarded.
-        let ix = self.venue.build(sp.token_transfer_authority, sp.source_mint, sp.in_amount, 0, 0, self.clock())?;
+        // slippage 0 - the serialized data is discarded.
+        let ix = self.venue.build(sp.token_transfer_authority, sp.source_mint, sp.in_amount, 0, self.clock())?;
 
         // One permissioned Reflect variant; the on-chain handler reads the
         // direction from the resolved account ORDER, so order is the contract.

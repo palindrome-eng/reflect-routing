@@ -15,7 +15,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyStateView, WhitelabelAccounts};
+use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyStateView, Whitelabel};
 use reflect_sdk::strategy::MintInfo;
 
 use crate::{spl_mint_info, RouteQuote};
@@ -30,7 +30,7 @@ pub enum WhitelabelRoute {
 }
 
 /// One branded market (a `ProxyState` PDA) on one proxy deployment.
-/// All protocol logic is `reflect-sdk`'s; the built [`WhitelabelAccounts`] is
+/// All protocol logic is `reflect-sdk`'s; the built [`Whitelabel`] is
 /// cached behind an `Arc` once per [`load`](Self::load), so quote/build reuse
 /// it and `Clone` stays cheap.
 ///
@@ -42,7 +42,7 @@ pub enum WhitelabelRoute {
 pub struct WhitelabelVenue {
     program_id: Pubkey,
     market: Pubkey,
-    loaded: Option<Arc<WhitelabelAccounts>>,
+    loaded: Option<Arc<Whitelabel>>,
     mints: Option<[MintInfo; 2]>, // [stablecoin (idx 0), branded (idx 1)]
 }
 
@@ -118,7 +118,7 @@ impl WhitelabelVenue {
         }
 
         let bytes = fetched.iter().map(|(k, o, d)| FetchedAccount { key: *k, owner: *o, data: d.clone() }).collect();
-        let accts = WhitelabelAccounts::from_fetched(self.program_id, branded, bytes).map_err(|e| anyhow!("from_fetched: {e:?}"))?;
+        let accts = Whitelabel::from_accounts(self.program_id, branded, bytes).map_err(|e| anyhow!("from_accounts: {e:?}"))?;
 
         self.mints = Some([spl_mint_info(stablecoin, &fetched)?, spl_mint_info(branded, &fetched)?]);
         self.loaded = Some(Arc::new(accts));
@@ -132,7 +132,7 @@ impl WhitelabelVenue {
         self.mints.as_ref().map_or(vec![], |m| m.to_vec())
     }
 
-    fn loaded(&self) -> Result<&WhitelabelAccounts> {
+    fn loaded(&self) -> Result<&Whitelabel> {
         self.loaded.as_deref().context("venue not loaded")
     }
 
@@ -162,8 +162,11 @@ impl WhitelabelVenue {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
         let accts = self.loaded()?;
-        self.route(input_mint)?;
-        Ok(accts.quote_by_mints(input_mint, amount, clock.into()).ok().map(|q| RouteQuote { amount_out: q.amount_out, fee: 0 }))
+        let output_mint = match self.route(input_mint)? {
+            WhitelabelRoute::Wrap => accts.branded_mint(),
+            WhitelabelRoute::Unwrap => accts.stablecoin_mint(),
+        };
+        Ok(accts.quote(input_mint, output_mint, amount, clock).ok().map(|q| RouteQuote { amount_out: q.amount_out, fee: 0 }))
     }
 
     /// Build the wrap/unwrap instruction; `min_out` is baked from
@@ -173,10 +176,10 @@ impl WhitelabelVenue {
     /// If the venue isn't loaded, the mint isn't in the pair, or the SDK
     /// refuses the quote the build embeds.
     pub fn build(&self, user: Pubkey, input_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Now) -> Result<Instruction> {
-        let h = self.loaded()?.whitelabel(user);
+        let market = self.loaded()?;
         let (_q, built) = match self.route(input_mint)? {
-            WhitelabelRoute::Wrap => h.wrap(amount, slippage_bps, clock.into()).map_err(|e| anyhow!("wrap: {e:?}"))?,
-            WhitelabelRoute::Unwrap => h.unwrap(amount, slippage_bps, clock.into()).map_err(|e| anyhow!("unwrap: {e:?}"))?,
+            WhitelabelRoute::Wrap => market.wrap(user, amount, slippage_bps, clock).map_err(|e| anyhow!("wrap: {e:?}"))?,
+            WhitelabelRoute::Unwrap => market.unwrap(user, amount, slippage_bps, clock).map_err(|e| anyhow!("unwrap: {e:?}"))?,
         };
         Ok(built.instruction)
     }

@@ -23,9 +23,6 @@ use reflect_titan_common::trading_venue::{
 /// Slippage baked into the built instruction's `min_out`. ponytail: 0.5% floor;
 /// tune (or thread from the route) once Titan's slippage model is pinned.
 const SLIPPAGE_BPS: u16 = 50;
-/// Units subtracted from a redeem's `min_out` to absorb venue-unwind rounding
-/// dust (the redeem quote is a tight UPPER bound). ponytail: 5 units.
-const HEADROOM_UNITS: u64 = 5;
 
 /// The Clock sysvar id (`SysvarC1ock11111111111111111111111111111111`).
 const CLOCK_SYSVAR: Pubkey = solana_program::sysvar::clock::ID;
@@ -146,10 +143,10 @@ impl TradingVenue for ReflectLendingVenue {
             return Err(TradingVenueError::NotInitialized(self.venue.market().into()));
         }
 
-        // Titan consumes the whole Instruction (min_out baked from SLIPPAGE_BPS +
-        // HEADROOM_UNITS), unlike Jupiter. extra_signers (Loopscale cosigner) is the
+        // Titan consumes the whole Instruction (min_out baked from SLIPPAGE_BPS),
+        // unlike Jupiter. extra_signers (Loopscale cosigner) is the
         // known execution blocker → the agreed reserve-only path; not resolvable here.
-        self.venue.build(user, request.input_mint, request.amount, SLIPPAGE_BPS, HEADROOM_UNITS, self.clock).map_err(venue_err)
+        self.venue.build(user, request.input_mint, request.amount, SLIPPAGE_BPS, self.clock).map_err(venue_err)
     }
 
     // bounds(): the default impl binary-searches our monotonic, zero-input-safe quote().

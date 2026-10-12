@@ -19,7 +19,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::rlp::{asset_keys, decode_asset_registry, pda, state_keys, AssetView, FetchedAccount, LiquidityPoolView, PoolAccounts};
+use reflect_sdk::rlp::{asset_keys, decode_asset_registry, pda, state_keys, AssetView, FetchedAccount, InsurancePool, LiquidityPoolView};
 use reflect_sdk::strategy::MintInfo;
 
 use crate::{spl_mint_info, RouteQuote};
@@ -39,7 +39,7 @@ pub struct RlpVenue {
     program_id: Pubkey,
     market: Pubkey,
     asset_mints: Vec<Pubkey>,
-    loaded: Option<Arc<PoolAccounts>>,
+    loaded: Option<Arc<InsurancePool>>,
     mints: Vec<MintInfo>, // [lp (idx 0), public asset_0..n in pool order] - mints[1..] IS the public set
 }
 
@@ -119,7 +119,7 @@ impl RlpVenue {
         }
 
         let bytes = fetched.iter().map(|(k, o, d)| FetchedAccount { key: *k, owner: *o, data: d.clone() }).collect();
-        let accts = PoolAccounts::from_fetched(self.program_id, pv.index(), &registry, bytes).map_err(|e| anyhow!("from_fetched: {e:?}"))?;
+        let accts = InsurancePool::from_accounts(self.program_id, pv.index(), bytes).map_err(|e| anyhow!("from_accounts: {e:?}"))?;
 
         // Only Public assets become routable mints: a Private asset needs a
         // permissions account an aggregator user cannot supply.
@@ -144,7 +144,7 @@ impl RlpVenue {
         self.mints.clone()
     }
 
-    fn loaded(&self) -> Result<&PoolAccounts> {
+    fn loaded(&self) -> Result<&InsurancePool> {
         self.loaded.as_deref().context("venue not loaded")
     }
 
@@ -185,7 +185,7 @@ impl RlpVenue {
         }
         let accts = self.loaded()?;
         self.route(input_mint, output_mint)?;
-        Ok(accts.quote_by_mints(input_mint, output_mint, amount, clock.into()).ok().map(|q| RouteQuote { amount_out: q.amount_out, fee: q.fee }))
+        Ok(accts.quote(input_mint, output_mint, amount, clock).ok().map(|q| RouteQuote { amount_out: q.amount_out, fee: q.fee }))
     }
 
     /// Build the deposit/swap instruction; `min_out` is baked from `slippage_bps`.
@@ -194,10 +194,10 @@ impl RlpVenue {
     /// If the venue isn't loaded, the mint pair doesn't classify, or the SDK
     /// refuses the quote the build embeds.
     pub fn build(&self, user: Pubkey, input_mint: Pubkey, output_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Now) -> Result<Instruction> {
-        let h = self.loaded()?.pool(user);
+        let pool = self.loaded()?;
         let (_q, built) = match self.route(input_mint, output_mint)? {
-            RlpRoute::Deposit => h.deposit(input_mint, amount, slippage_bps, clock.into()).map_err(|e| anyhow!("deposit: {e:?}"))?,
-            RlpRoute::Swap => h.swap(input_mint, output_mint, amount, slippage_bps, clock.into()).map_err(|e| anyhow!("swap: {e:?}"))?,
+            RlpRoute::Deposit => pool.deposit(user, input_mint, amount, slippage_bps, clock).map_err(|e| anyhow!("deposit: {e:?}"))?,
+            RlpRoute::Swap => pool.swap(user, input_mint, output_mint, amount, slippage_bps, clock).map_err(|e| anyhow!("swap: {e:?}"))?,
         };
         Ok(built.instruction)
     }

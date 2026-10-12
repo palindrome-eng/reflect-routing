@@ -10,14 +10,14 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::strategy::{index_discovery_keys, pda, StrategyAccounts, TokenInput};
+use reflect_sdk::strategy::{index_discovery_keys, pda, FetchedAccount, Strategy, TokenInput};
 
 pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
 
 use crate::RouteQuote;
 
 /// The Reflect bond basket (1 receipt + N assets), bound to one controller.
-/// All protocol logic is `reflect-sdk`'s; the built [`StrategyAccounts`] is
+/// All protocol logic is `reflect-sdk`'s; the built [`Strategy`] is
 /// cached behind an `Arc` once per [`load`](Self::load), so quote/build reuse
 /// it and `Clone` stays cheap.
 ///
@@ -29,7 +29,7 @@ use crate::RouteQuote;
 pub struct BondVenue {
     program_id: Pubkey,
     controller: Pubkey,
-    loaded: Option<Arc<StrategyAccounts>>,
+    loaded: Option<Arc<Strategy>>,
     mints: Option<IndexMints>,
 }
 
@@ -75,7 +75,8 @@ impl BondVenue {
     /// every bond basket has assets, so a bond controller with unreadable
     /// mints is a malformed market, not a legitimate empty one.
     pub fn load(&mut self, accounts: impl IntoIterator<Item = (Pubkey, Pubkey, Vec<u8>)>) -> Result<()> {
-        let accts = StrategyAccounts::from_account_map(&self.program_id, &self.controller, accounts).map_err(|e| anyhow!("from_controller: {e:?}"))?;
+        let bytes = accounts.into_iter().map(|(key, owner, data)| FetchedAccount { key, owner, data }).collect();
+        let accts = Strategy::from_accounts(self.program_id, self.controller, bytes).map_err(|e| anyhow!("from_accounts: {e:?}"))?;
         let mints = accts.index_mints().map_err(|e| anyhow!("index_mints: {e:?}"))?;
         self.mints = Some(mints);
         self.loaded = Some(Arc::new(accts));
@@ -88,7 +89,7 @@ impl BondVenue {
         self.mints.as_ref().map_or(vec![], |m| core::iter::once(m.receipt).chain(m.assets.iter().map(|(_, mi)| *mi)).collect())
     }
 
-    fn loaded(&self) -> Result<&StrategyAccounts> {
+    fn loaded(&self) -> Result<&Strategy> {
         self.loaded.as_deref().context("venue not loaded")
     }
 
@@ -122,13 +123,11 @@ impl BondVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
-        let q = self.loaded()?.bond_quote_by_mints(input_mint, output_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
+        let q = self.loaded()?.quote(input_mint, output_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: 0 }))
     }
 
-    /// Build the swap instruction. `min_out` is baked from `slippage_bps`
-    /// alone - there is no redeem `headroom` parameter for bonds (that is
-    /// lending-redeem-specific dust absorption).
+    /// Build the swap instruction. `min_out` is baked from `slippage_bps`.
     ///
     /// For the redeem direction the baked `min_out` is a USD@1e6 net-withdraw
     /// floor (the on-chain redeem instruction's unit), NOT out-token atoms;

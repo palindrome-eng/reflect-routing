@@ -15,7 +15,7 @@ use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
 use reflect_sdk::common::Now;
-use reflect_sdk::strategy::{lending_discovery_keys, pda, StrategyAccounts, TradablePair};
+use reflect_sdk::strategy::{lending_discovery_keys, pda, FetchedAccount, Strategy, TradablePair};
 
 pub use bonds::BondVenue;
 pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
@@ -38,7 +38,7 @@ pub struct RouteQuote {
 }
 
 /// The Reflect lending strategy (deposit ↔ receipt), bound to one controller.
-/// All protocol logic is `reflect-sdk`'s; the built [`StrategyAccounts`] is
+/// All protocol logic is `reflect-sdk`'s; the built [`Strategy`] is
 /// cached behind an `Arc` once per [`load`](Self::load), so quote/build reuse
 /// it (Titan's `bounds()` quotes dozens of times) and `Clone` stays cheap.
 ///
@@ -50,7 +50,7 @@ pub struct RouteQuote {
 pub struct LendingVenue {
     program_id: Pubkey,
     controller: Pubkey,
-    loaded: Option<Arc<StrategyAccounts>>,
+    loaded: Option<Arc<Strategy>>,
     pair: Option<TradablePair>,
 }
 
@@ -91,7 +91,8 @@ impl LendingVenue {
     /// # Errors
     /// If the fetched bytes don't decode into a valid controller.
     pub fn load(&mut self, accounts: impl IntoIterator<Item = (Pubkey, Pubkey, Vec<u8>)>) -> Result<()> {
-        let accts = StrategyAccounts::from_account_map(&self.program_id, &self.controller, accounts).map_err(|e| anyhow!("from_controller: {e:?}"))?;
+        let bytes = accounts.into_iter().map(|(key, owner, data)| FetchedAccount { key, owner, data }).collect();
+        let accts = Strategy::from_accounts(self.program_id, self.controller, bytes).map_err(|e| anyhow!("from_accounts: {e:?}"))?;
         self.pair = accts.tradable_pair().ok(); // None for reserve-only strategies
         self.loaded = Some(Arc::new(accts));
         Ok(())
@@ -103,7 +104,7 @@ impl LendingVenue {
         self.pair.as_ref().map_or(vec![], |p| vec![p.deposit, p.receipt])
     }
 
-    fn loaded(&self) -> Result<&StrategyAccounts> {
+    fn loaded(&self) -> Result<&Strategy> {
         self.loaded.as_deref().context("venue not loaded")
     }
 
@@ -121,27 +122,29 @@ impl LendingVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
-        let q = self.loaded()?.quote_by_mints(input_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
+        let pair = self.pair.as_ref().context("no tradable pair")?;
+        let output_mint = if input_mint == pair.deposit.pubkey { pair.receipt.pubkey } else { pair.deposit.pubkey };
+        let q = self.loaded()?.quote(input_mint, output_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
         // A predicted revert (supply floor / cap) is no route, not a bad route.
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: q.fee }))
     }
 
-    /// Build the swap instruction. `min_out` is baked from `slippage_bps` and
-    /// `headroom` (redeem dust); pass `0, 0` for a host that applies its own
-    /// (Jupiter's program writes the instruction data from the route context).
+    /// Build the swap instruction. `min_out` is baked from `slippage_bps`; pass `0`
+    /// for a host that applies its own (Jupiter's program writes the instruction
+    /// data from the route context).
     ///
     /// # Errors
     /// If the venue isn't loaded, or the SDK's mint/redeem build fails.
-    pub fn build(&self, user: Pubkey, input_mint: Pubkey, amount: u64, slippage_bps: u16, headroom: u64, clock: Now) -> Result<Instruction> {
+    pub fn build(&self, user: Pubkey, input_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Now) -> Result<Instruction> {
         let accts = self.loaded()?;
         let pair = self.pair.as_ref().context("no tradable pair")?;
-        let h = accts.lending(user, pair.deposit.pubkey, pair.deposit.token_program).map_err(|e| anyhow!("lending: {e:?}"))?;
+        let h = accts.lending(user).map_err(|e| anyhow!("lending: {e:?}"))?;
         // The one dispatch a venue owns: input == deposit ⇒ mint, else redeem (the
         // SDK's TradablePair rule). Build with the request amount, not the quote.
         let (_q, built) = if input_mint == pair.deposit.pubkey {
             h.mint(amount, slippage_bps, clock).map_err(|e| anyhow!("mint: {e:?}"))?
         } else {
-            h.redeem(amount, slippage_bps, headroom, clock).map_err(|e| anyhow!("redeem: {e:?}"))?
+            h.redeem(amount, slippage_bps, clock).map_err(|e| anyhow!("redeem: {e:?}"))?
         };
         Ok(built.instruction)
     }

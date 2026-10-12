@@ -3,7 +3,7 @@
 //!
 //! Jupiter's end-to-end swap cannot run here — the `Swap::ReflectS1` handler is
 //! Jupiter's closed program — so the test validates the owned parts:
-//!   - `ReflectLendingAmm::quote` == `reflect-sdk` `quote_by_mints`. Both adapters
+//!   - `ReflectLendingAmm::quote` == `reflect-sdk` `quote`. Both adapters
 //!     delegate to that one call, and the Titan suite proves it equals on-chain
 //!     execution atom-for-atom, so quote==execution transfers here WITHOUT an SVM
 //!     (Jupiter's build is the same SDK ix the Titan side already executes).
@@ -24,7 +24,7 @@ use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::pubkey::Pubkey;
 
 use reflect_sdk::common::Now as ReflectClock;
-use reflect_sdk::strategy::{pda, FetchedAccount, StrategyAccounts};
+use reflect_sdk::strategy::{pda, FetchedAccount, Strategy};
 
 use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
 use reflect_jupiter_lending::ReflectLendingAmm;
@@ -102,9 +102,11 @@ fn sdk_quote(snap: &Snapshot, input_mint: Pubkey, amount: u64, clock: &ClockRef)
     let reg = snap.map.get(&registry).unwrap();
     let keys = reflect_sdk::strategy::lending_discovery_keys(&ctrl.data, &reg.data, &pid).unwrap();
     let bytes: Vec<FetchedAccount> = keys.iter().filter_map(|k| snap.map.get(k).map(|a| FetchedAccount { key: *k, owner: a.owner, data: a.data.clone() })).collect();
-    let accts = StrategyAccounts::from_controller(&pid, &snap.controller, bytes).unwrap();
+    let accts = Strategy::from_accounts(pid, snap.controller, bytes).unwrap();
+    let pair = accts.tradable_pair().unwrap();
+    let output_mint = if input_mint == pair.deposit.pubkey { pair.receipt.pubkey } else { pair.deposit.pubkey };
     let rc = ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix_timestamp: clock.unix_timestamp.load(Ordering::Relaxed) };
-    accts.quote_by_mints(input_mint, amount, rc).unwrap().amount_out
+    accts.quote(input_mint, output_mint, amount, rc).unwrap().amount_out
 }
 
 /// The Jupiter adapter's quote must equal the reflect-sdk quote (= Titan's, =

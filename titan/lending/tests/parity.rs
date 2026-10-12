@@ -273,14 +273,8 @@ fn log_uniform_samples(lo: u64, hi: u64, n: usize) -> Vec<u64> {
 const MINT_LO: u64 = 1_000;
 const MINT_HI: u64 = 1_000_000_000_000; // 1e12 — well under the 1e15 cap
 const REDEEM_LO: u64 = 1_000_000; // above the withdraw-dust revert threshold
-/// Units the venue unwind may shave off a redeem below its quote. The SDK
-/// conformance suite pins the same bound (reflect-core `lending_sdk_tests`).
-const REDEEM_DUST_TOL: u64 = 4;
 
-/// Mint: `delta == quote`, exact. Redeem: the quote is the program's withdrawal
-/// TARGET and a tight UPPER bound on the payout; the venue unwind (Save's
-/// liquidity -> collateral -> liquidity floor round-trip) may shave dust, so
-/// `quote - REDEEM_DUST_TOL <= delta <= quote`. Both directions, across the
+/// Mint and redeem: `delta == quote`, atom-exact. Both directions, across the
 /// band endpoints + a log-uniform sweep (>=50 each).
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
@@ -301,12 +295,8 @@ async fn parity_swept_both_directions() {
             assert!(!q.not_enough_liquidity, "amount {amt} unexpectedly outside the routable band {lo}..={hi}");
             let mut svm = load_svm(&snap, &programs);
             let delta = sim_delta(&mut svm, &venue, &snap.user, in_mint, out_mint, amt, in_tp, out_tp).expect("simulate");
-            if in_mint == deposit.0 {
-                assert_eq!(delta, q.expected_output, "atom-exact mint parity broke: amount {amt}: quote {} sim {delta}", q.expected_output);
-            } else {
-                assert!(delta <= q.expected_output, "redeem paid MORE than quoted: amount {amt}: quote {} sim {delta}", q.expected_output);
-                assert!(q.expected_output - delta <= REDEEM_DUST_TOL, "redeem dust past tolerance: amount {amt}: quote {} sim {delta}", q.expected_output);
-            }
+            let dir = if in_mint == deposit.0 { "mint" } else { "redeem" };
+            assert_eq!(delta, q.expected_output, "atom-exact {dir} parity broke: amount {amt}: quote {} sim {delta}", q.expected_output);
         }
     }
 }
