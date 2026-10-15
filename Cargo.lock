@@ -2249,8 +2249,8 @@ dependencies = [
 
 [[package]]
 name = "reflect-sdk"
-version = "0.17.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.17.0#aefd07ecaa6caed14d67cd96ebdaa6481c00ade3"
+version = "0.19.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.19.0#3d5c4c93863ba98c8c937101a63ac0e6ee65d580"
 dependencies = [
  "reflect-sdk-core",
  "solana-account",
@@ -2263,8 +2263,8 @@ dependencies = [
 
 [[package]]
 name = "reflect-sdk-core"
-version = "0.17.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.17.0#aefd07ecaa6caed14d67cd96ebdaa6481c00ade3"
+version = "0.19.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.19.0#3d5c4c93863ba98c8c937101a63ac0e6ee65d580"
 dependencies = [
  "uint",
 ]
