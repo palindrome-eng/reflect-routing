@@ -328,6 +328,11 @@ async fn edges_zero_and_redeem_floor() {
         let z = venue.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 0, swap_type: SwapType::ExactIn }).expect("zero quote");
         assert_eq!(z.expected_output, 0);
         assert!(!z.not_enough_liquidity, "amount 0 is not a liquidity failure");
+        // Titan `price`: a positive spot at zero input that, on this linear route, prices
+        // a real fill to within Titan's 1e-5 mean-value tolerance.
+        assert!(z.price > 0.0, "spot must be positive, got {}", z.price);
+        let q = venue.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 1_000_000, swap_type: SwapType::ExactIn }).expect("probe quote");
+        assert!((q.price * 1_000_000.0 - q.expected_output as f64).abs() <= q.expected_output as f64 * 1e-5 + 1.0, "price {} vs out {} at 1_000_000", q.price, q.expected_output);
     }
 
     // A burn worth more than the vault underflows on chain → would_revert →

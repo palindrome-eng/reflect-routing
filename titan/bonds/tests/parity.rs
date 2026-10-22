@@ -241,6 +241,11 @@ async fn edges_zero_and_overask() {
     let zero = venue.quote(QuoteRequest { input_mint: assets[0], output_mint: receipt, amount: 0, swap_type: SwapType::ExactIn }).expect("zero quote");
     assert_eq!(zero.expected_output, 0);
     assert!(!zero.not_enough_liquidity, "zero input is routable-with-zero-output");
+    // Titan `price`: a positive spot at zero input that, on the linear mint, prices a
+    // real fill to within Titan's 1e-5 mean-value tolerance.
+    assert!(zero.price > 0.0, "spot must be positive, got {}", zero.price);
+    let q = venue.quote(QuoteRequest { input_mint: assets[0], output_mint: receipt, amount: 1_000_000, swap_type: SwapType::ExactIn }).expect("probe quote");
+    assert!((q.price * 1_000_000.0 - q.expected_output as f64).abs() <= q.expected_output as f64 * 1e-5 + 1.0, "price {} vs out {} at 1_000_000", q.price, q.expected_output);
 
     let over = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[1], amount: u64::MAX, swap_type: SwapType::ExactIn }).expect("over quote");
     assert!(over.not_enough_liquidity, "over-ask must flag no-liquidity");

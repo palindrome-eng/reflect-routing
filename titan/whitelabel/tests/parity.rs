@@ -142,6 +142,12 @@ async fn edges(fx: &mut Fx, stale: Clock, expected_log: &str) {
     for (a, b) in [(fx.stablecoin, fx.branded), (fx.branded, fx.stablecoin)] {
         let z = v.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 0, swap_type: SwapType::ExactIn }).unwrap();
         assert_eq!((z.expected_output, z.not_enough_liquidity), (0, false), "amount 0 is not a liquidity failure");
+        // Titan `price`: a positive spot at zero input that, on this linear route, prices
+        // a real fill to within Titan's 1e-5 mean-value tolerance.
+        assert!(z.price > 0.0, "spot must be positive, got {}", z.price);
+        let q = v.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 1_000_000, swap_type: SwapType::ExactIn }).unwrap();
+        assert!(!q.not_enough_liquidity, "1_000_000 fills on both markets");
+        assert!((q.price * 1_000_000.0 - q.expected_output as f64).abs() <= q.expected_output as f64 * 1e-5 + 1.0, "price {} vs out {} at 1_000_000", q.price, q.expected_output);
     }
     let fresh =
         v.generate_swap_instruction(QuoteRequest { input_mint: fx.stablecoin, output_mint: fx.branded, amount: 1_000_000, swap_type: SwapType::ExactIn }, user.pubkey()).unwrap();

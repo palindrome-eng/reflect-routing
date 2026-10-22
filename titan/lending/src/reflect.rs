@@ -13,7 +13,7 @@ use solana_pubkey::Pubkey;
 use reflect_sdk::common::ids::{TOKEN_2022_PROGRAM, TOKEN_PROGRAM};
 use reflect_sdk::common::Now;
 
-use reflect_routing_core::{LendingVenue, MintInfo};
+use reflect_routing_core::{marginal_price, LendingVenue, MintInfo};
 
 use reflect_titan_common::account_caching::AccountsCache;
 use reflect_titan_common::trading_venue::{
@@ -124,10 +124,15 @@ impl TradingVenue for ReflectLendingVenue {
         // Zero input → clean 0 (never panics). A predicted revert (supply
         // floor/cap) or any quote error maps to no-liquidity - exactly what
         // bounds() and the not_enough_liquidity flag expect.
-        let expected_output = match self.venue.quote(request.input_mint, request.amount, self.clock) {
-            Ok(Some(q)) => q.amount_out,
-            _ => 0,
+        let q = |amount: u64| match self.venue.quote(request.input_mint, amount, self.clock) {
+            Ok(Some(q)) => Some(q.amount_out),
+            _ => None,
         };
+        let expected_output = q(request.amount).unwrap_or(0);
+        // Titan reads the venue's rate regardless of whether this size fills: the marginal
+        // at `amount`, else the spot; `0.0` only when the market has no route at all.
+        let probe = 10u64.pow(self.get_token_info().iter().find(|t| t.pubkey == request.input_mint).map_or(0, |t| t.decimals as u32));
+        let price = marginal_price(q, request.amount, probe).or_else(|| marginal_price(q, 0, probe)).unwrap_or(0.0);
 
         Ok(QuoteResult {
             input_mint: request.input_mint,
@@ -135,6 +140,7 @@ impl TradingVenue for ReflectLendingVenue {
             amount: request.amount,
             expected_output,
             not_enough_liquidity: expected_output == 0 && request.amount > 0,
+            price,
         })
     }
 

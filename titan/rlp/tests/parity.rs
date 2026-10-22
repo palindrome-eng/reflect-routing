@@ -134,6 +134,12 @@ async fn prod_edges_agree_with_the_program() {
     assert!(v.bounds(0, 1).is_err(), "LP -> asset has no quotable value");
     let z = v.quote(QuoteRequest { input_mint: fx.asset_mint, output_mint: fx.lp_mint, amount: 0, swap_type: SwapType::ExactIn }).unwrap();
     assert_eq!((z.expected_output, z.not_enough_liquidity), (0, false));
+    // Titan `price`: a positive spot at zero input that, on the linear deposit, prices a
+    // real fill to within Titan's 1e-5 mean-value tolerance. LP as input is not a declared direction.
+    assert!(z.price > 0.0, "spot must be positive, got {}", z.price);
+    let q = v.quote(QuoteRequest { input_mint: fx.asset_mint, output_mint: fx.lp_mint, amount: 1_000_000, swap_type: SwapType::ExactIn }).unwrap();
+    assert!((q.price * 1_000_000.0 - q.expected_output as f64).abs() <= q.expected_output as f64 * 1e-5 + 1.0, "price {} vs out {} at 1_000_000", q.price, q.expected_output);
+    assert!(v.directions_num().iter().all(|&(i, _)| i != 0), "LP as input must not be a declared direction");
 
     let fresh_ix =
         v.generate_swap_instruction(QuoteRequest { input_mint: fx.asset_mint, output_mint: fx.lp_mint, amount: 1_000_000, swap_type: SwapType::ExactIn }, user.pubkey()).unwrap();

@@ -1,7 +1,7 @@
 [package]
 name = "reflect-titan-common"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Vendored Titan-Pathfinder integration-template TradingVenue contract, shared by every titan/<product> crate."
 
 [dependencies]

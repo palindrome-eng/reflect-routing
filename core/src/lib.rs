@@ -37,6 +37,30 @@ pub struct RouteQuote {
     pub fee: u64,
 }
 
+/// Titan's marginal price, output atoms per input atom, read off the quote curve alone.
+///
+/// `amount == 0` is the spot: the secant through the origin at `probe`, one whole input
+/// unit. Otherwise a central secant over `h = max(amount / 100, probe)`, forward at the lower
+/// edge, backward when the upper probe has no route. Floor noise is bounded by `1 / (2h)` of
+/// the rate, under Titan's 1e-5 mean-value tolerance for any whole-unit window; a 1% window
+/// keeps curved routes inside their local slope. `None` when no probe quotes.
+///
+/// ponytail: interim until the SDK exposes an exact amount-free `spot`; this costs two
+/// quotes per call, which the no-alloc/speed gate replaces with a cached rate.
+pub fn marginal_price(quote: impl Fn(u64) -> Option<u64>, amount: u64, probe: u64) -> Option<f64> {
+    let probe = probe.max(1);
+    if amount == 0 {
+        return Some(quote(probe)? as f64 / probe as f64);
+    }
+    let h = (amount / 100).max(probe);
+    let lo = amount.saturating_sub(h);
+    let secant = |a: u64, b: u64| Some((quote(b)? as f64 - quote(a)? as f64) / (b - a) as f64);
+    match amount.checked_add(h) {
+        Some(hi) => secant(lo, hi).or_else(|| secant(lo, amount)),
+        None => secant(lo, amount),
+    }
+}
+
 /// The Reflect lending strategy (deposit ↔ receipt), bound to one controller.
 /// All protocol logic is `reflect-sdk`'s; the built [`Strategy`] is
 /// cached behind an `Arc` once per [`load`](Self::load), so quote/build reuse
@@ -163,5 +187,36 @@ mod tests {
         assert!(matches!(z, Some(RouteQuote { amount_out: 0, .. })));
         // A real amount on an unloaded venue is an error (nothing cached).
         assert!(v.quote(Pubkey::new_unique(), 1, Now { slot: 0, unix_timestamp: 0 }).is_err());
+    }
+}
+
+#[cfg(test)]
+mod marginal_price_tests {
+    use super::marginal_price;
+
+    // out = floor(in * 3 / 2): spot and every marginal equal 1.5 to within a floor.
+    #[test]
+    fn linear_route_is_constant() {
+        let q = |a: u64| Some(a * 3 / 2);
+        assert_eq!(marginal_price(q, 0, 1_000_000), Some(1.5));
+        let m = marginal_price(q, 123_457, 1_000_000).unwrap();
+        assert!((m - 1.5).abs() < 1e-3, "{m}");
+    }
+
+    // out = in - in^2 / 1e9: slope 1 - 2x/1e9, decreasing in size.
+    #[test]
+    fn curved_route_slope_decreases() {
+        let q = |a: u64| Some(a - (a as u128 * a as u128 / 1_000_000_000) as u64);
+        let small = marginal_price(q, 1_000_000, 1_000_000).unwrap();
+        let large = marginal_price(q, 100_000_000, 1_000_000).unwrap();
+        assert!(small > large && (small - 0.998).abs() < 1e-3 && (large - 0.8).abs() < 1e-3, "{small} {large}");
+    }
+
+    // Above the cap the upper probe has no route: the secant falls back to the lower side.
+    #[test]
+    fn capped_route_uses_backward_secant() {
+        let q = |a: u64| (a <= 10_000_000).then_some(a * 2);
+        assert_eq!(marginal_price(q, 10_000_000, 1_000_000), Some(2.0));
+        assert_eq!(marginal_price(q, 20_000_000, 1_000_000), None);
     }
 }
