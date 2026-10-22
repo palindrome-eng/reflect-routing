@@ -15,7 +15,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyStateView, Whitelabel};
+use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyQuoteKernel, ProxyStateView, Whitelabel};
 use reflect_sdk::strategy::MintInfo;
 
 use crate::{spl_mint_info, RouteQuote};
@@ -44,13 +44,17 @@ pub struct WhitelabelVenue {
     market: Pubkey,
     loaded: Option<Arc<Whitelabel>>,
     mints: Option<[MintInfo; 2]>, // [stablecoin (idx 0), branded (idx 1)]
+    /// The market settled at the clock [`settle`](Self::settle) was given; `None` until
+    /// settled, or when the price did not resolve at that clock (stale: no route). A quote
+    /// at any other clock settles for itself.
+    kernel: Option<(Now, ProxyQuoteKernel)>,
 }
 
 impl WhitelabelVenue {
     /// Construct cold from the `ProxyState` account the aggregator lists:
     /// `market` is its key, `program_id` its owner (mainnet or staging proxy).
     pub fn from_market(program_id: Pubkey, market: Pubkey) -> Self {
-        Self { program_id, market, loaded: None, mints: None }
+        Self { program_id, market, loaded: None, mints: None, kernel: None }
     }
 
     /// The owning proxy program id.
@@ -136,6 +140,17 @@ impl WhitelabelVenue {
         self.loaded.as_deref().context("venue not loaded")
     }
 
+    /// Settle the loaded market at `now`: resolves the oracle chain once so every quote is
+    /// arithmetic over owned state. A price that does not resolve leaves no kernel, which
+    /// `quote` reports as no route.
+    ///
+    /// # Errors
+    /// If the venue isn't loaded.
+    pub fn settle(&mut self, now: Now) -> Result<()> {
+        self.kernel = self.loaded()?.kernel(now).ok().map(|k| (now, k));
+        Ok(())
+    }
+
     /// Classify the input mint.
     pub fn route(&self, input_mint: Pubkey) -> Result<WhitelabelRoute> {
         let m = self.mints.as_ref().context("venue not loaded")?;
@@ -148,8 +163,9 @@ impl WhitelabelVenue {
         }
     }
 
-    /// Quote `amount` of `input_mint` into its counterpart, ExactIn. `None` is
-    /// "no route": the SDK predicts the revert the program would raise.
+    /// Quote `amount` of `input_mint` into its counterpart, ExactIn, from the kernel
+    /// [`settle`](Self::settle) left. `None` is "no route": the SDK predicts the revert the
+    /// program would raise, or the market is unsettled at this clock.
     /// `amount == 0` returns `Some(zero)` before touching state.
     ///
     /// `fee` is ALWAYS 0: the crank folds the integrator fee into principal
@@ -161,25 +177,30 @@ impl WhitelabelVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
-        let accts = self.loaded()?;
+        self.loaded()?;
         let route = self.route(input_mint)?;
-        let output_mint = match route {
-            WhitelabelRoute::Wrap => accts.branded_mint(),
-            WhitelabelRoute::Unwrap => accts.stablecoin_mint(),
-        };
-        let Ok(q) = accts.quote(input_mint, output_mint, amount, clock) else {
-            return Ok(None);
+        let fresh;
+        let k = match self.kernel.as_ref() {
+            Some((at, k)) if *at == clock => k,
+            // Quoted at a clock the venue was not settled at: settle for this call.
+            _ => match self.loaded()?.kernel(clock) {
+                Ok(k) => {
+                    fresh = k;
+                    &fresh
+                },
+                Err(_) => return Ok(None),
+            },
         };
         // The branded mint's `u64` supply is a ceiling the proxy math does not see: `MintTo`
         // overflows past it and `Burn` underflows below it. Both are program reverts, so both
         // are "no route" here, which keeps `bounds()` inside what executes.
         // ponytail: lives here until the SDK's wrap/unwrap quotes model the SPL supply ceiling.
-        let supply = accts.state(clock).map_err(|e| anyhow!("state: {e:?}"))?.vault.branded_supply;
-        let executes = match route {
-            WhitelabelRoute::Wrap => supply.checked_add(q.amount_out).is_some(),
-            WhitelabelRoute::Unwrap => amount <= supply,
+        let supply = k.vault().branded_supply;
+        let out = match route {
+            WhitelabelRoute::Wrap => k.quote_wrap(amount, 1).ok().map(|q| q.minted).filter(|out| supply.checked_add(*out).is_some()),
+            WhitelabelRoute::Unwrap => (amount <= supply).then(|| k.quote_unwrap(amount, 1).ok().map(|q| q.out)).flatten(),
         };
-        Ok(executes.then_some(RouteQuote { amount_out: q.amount_out, fee: 0 }))
+        Ok(out.map(|amount_out| RouteQuote { amount_out, fee: 0 }))
     }
 
     /// Build the wrap/unwrap instruction; `min_out` is baked from

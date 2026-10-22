@@ -368,3 +368,47 @@ pub fn assert_titan_contract<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, seed
         eprintln!("titan contract: {dir} ok over [{lb}, {ub}]");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Titan's performance contract: no heap allocation inside `quote()` and under
+// 1 µs per quote. The allocation guard needs `assert_no_alloc::AllocDisabler`
+// installed as the test binary's global allocator under `debug_assertions`;
+// the timing runs under `--release`.
+// ---------------------------------------------------------------------------
+
+pub use assert_no_alloc::{AllocDisabler, assert_no_alloc};
+
+/// Upstream `construction`: `bounds()` and both edge quotes run with the heap disabled.
+pub fn assert_quotes_do_not_allocate<V: TradingVenue>(venue: &V) {
+    for (i, j) in venue.directions_num() {
+        let (in_mint, out_mint) = (venue.get_token(i as usize).unwrap().pubkey, venue.get_token(j as usize).unwrap().pubkey);
+        let (lb, ub) = assert_no_alloc(|| venue.bounds(i, j)).unwrap_or_else(|e| panic!("{in_mint}->{out_mint}: bounds failed: {e:?}"));
+        for amount in [0, lb, ub] {
+            let q = assert_no_alloc(|| venue.quote(exact_in(in_mint, out_mint, amount))).unwrap_or_else(|e| panic!("{in_mint}->{out_mint}: quote at {amount} errored: {e:?}"));
+            assert!(q.price > 0.0, "{in_mint}->{out_mint}: price at {amount} must be positive");
+        }
+    }
+}
+
+/// Upstream `quoting_speed`: 10,000 seeded log-uniform quotes per direction must average
+/// under `max_avg_ns` (Titan: 1,000 ns). Meaningful under `--release` only.
+pub fn assert_quote_speed<V: TradingVenue>(venue: &V, seed: u64, max_avg_ns: f64) {
+    const ITERATIONS: usize = 10_000;
+    if cfg!(debug_assertions) {
+        eprintln!("quote speed: SKIP in a debug build; run under --release");
+        return;
+    }
+    let mut rng = Rng::new(seed);
+    for (i, j) in venue.directions_num() {
+        let (in_mint, out_mint) = (venue.get_token(i as usize).unwrap().pubkey, venue.get_token(j as usize).unwrap().pubkey);
+        let (lb, ub) = venue.bounds(i, j).expect("bounds");
+        let amounts: Vec<u64> = (0..ITERATIONS).map(|_| rng.log_uniform(lb, ub)).collect();
+        let start = std::time::Instant::now();
+        for amount in amounts {
+            let _ = venue.quote(exact_in(in_mint, out_mint, amount)).expect("quote");
+        }
+        let avg_ns = start.elapsed().as_nanos() as f64 / ITERATIONS as f64;
+        eprintln!("quote speed: {in_mint}->{out_mint} avg {avg_ns:.0} ns");
+        assert!(avg_ns < max_avg_ns, "{in_mint}->{out_mint}: {avg_ns:.0} ns per quote exceeds {max_avg_ns:.0} ns");
+    }
+}

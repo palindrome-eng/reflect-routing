@@ -11,7 +11,7 @@ use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
 use reflect_sdk::core::main::tvl::mint_supply;
-use reflect_sdk::strategy::{index_discovery_keys, pda, FetchedAccount, Strategy, TokenInput};
+use reflect_sdk::strategy::{index_discovery_keys, pda, FetchedAccount, IndexQuoteKernel, Strategy, TokenInput};
 
 pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
 
@@ -34,13 +34,17 @@ pub struct BondVenue {
     mints: Option<IndexMints>,
     /// Receipt mint supply at load: the ceiling on a redeem burn.
     receipt_supply: u64,
+    /// The basket settled at the clock [`settle`](Self::settle) was given; `None` until
+    /// settled, or when settlement failed at that clock (no route). A quote at any other
+    /// clock settles for itself.
+    kernel: Option<(Now, IndexQuoteKernel)>,
 }
 
 impl BondVenue {
     /// Construct cold from the market account the aggregator lists: `market` is
     /// its key, `owner` its program id.
     pub fn from_market(market: Pubkey, owner: Pubkey) -> Self {
-        Self { program_id: owner, controller: market, loaded: None, mints: None, receipt_supply: 0 }
+        Self { program_id: owner, controller: market, loaded: None, mints: None, receipt_supply: 0, kernel: None }
     }
 
     /// The owning Reflect program id.
@@ -94,6 +98,17 @@ impl BondVenue {
         self.mints.as_ref().map_or(vec![], |m| core::iter::once(m.receipt).chain(m.assets.iter().map(|(_, mi)| *mi)).collect())
     }
 
+    /// Settle the loaded basket at `now`: due knobs landed, every asset priced, yield
+    /// captured once, so each quote is arithmetic over owned state. A settlement that
+    /// fails leaves no kernel, which `quote` reports as no route.
+    ///
+    /// # Errors
+    /// If the venue isn't loaded.
+    pub fn settle(&mut self, now: Now) -> Result<()> {
+        self.kernel = self.loaded()?.index_kernel(now).ok().map(|k| (now, k));
+        Ok(())
+    }
+
     fn loaded(&self) -> Result<&Strategy> {
         self.loaded.as_deref().context("venue not loaded")
     }
@@ -128,12 +143,25 @@ impl BondVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
+        let route = self.route(input_mint, output_mint)?;
         // A burn above the receipt supply is a request nobody can hold; the program's
         // `process_redemption` underflows on it before the SPL burn would. No route.
-        if matches!(self.route(input_mint, output_mint)?, IndexRoute::RedeemByReceipt { .. }) && amount > self.receipt_supply {
+        if matches!(route, IndexRoute::RedeemByReceipt { .. }) && amount > self.receipt_supply {
             return Ok(None);
         }
-        let q = self.loaded()?.quote(input_mint, output_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
+        let fresh;
+        let k = match self.kernel.as_ref() {
+            Some((at, k)) if *at == clock => k,
+            // Quoted at a clock the venue was not settled at: settle for this call.
+            _ => match self.loaded()?.index_kernel(clock) {
+                Ok(k) => {
+                    fresh = k;
+                    &fresh
+                },
+                Err(_) => return Ok(None),
+            },
+        };
+        let q = k.quote(route, amount).map_err(|e| anyhow!("quote: {e:?}"))?;
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: 0 }))
     }
 

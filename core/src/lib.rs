@@ -9,13 +9,13 @@ mod whitelabel;
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
 use reflect_sdk::common::Now;
-use reflect_sdk::strategy::{lending_discovery_keys, pda, FetchedAccount, Strategy, TradablePair};
+use reflect_sdk::strategy::{lending_discovery_keys, pda, FetchedAccount, LendingQuoteKernel, Strategy, TradablePair};
 
 pub use bonds::BondVenue;
 pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
@@ -40,24 +40,27 @@ pub struct RouteQuote {
 /// Titan's marginal price, output atoms per input atom, read off the quote curve alone.
 ///
 /// `amount == 0` is the spot: the secant through the origin at `probe`, one whole input
-/// unit. Otherwise a central secant over `h = max(amount / 100, probe)`, forward at the lower
-/// edge, backward when the upper probe has no route. Floor noise is bounded by `1 / (2h)` of
-/// the rate, under Titan's 1e-5 mean-value tolerance for any whole-unit window; a 1% window
-/// keeps curved routes inside their local slope. `None` when no probe quotes.
+/// unit. Otherwise the forward secant from `(amount, out)` over `h = max(amount / 100, probe)`,
+/// backward when the upper probe has no route. Floor noise is bounded by `1 / h` of the
+/// rate, under Titan's 1e-5 mean-value tolerance for any whole-unit window, and a forward
+/// secant on a concave curve sits between the true slope and the chord Titan checks it
+/// against. `None` when no probe quotes.
 ///
-/// ponytail: interim until the SDK exposes an exact amount-free `spot`; this costs two
-/// quotes per call, which the no-alloc/speed gate replaces with a cached rate.
-pub fn marginal_price(quote: impl Fn(u64) -> Option<u64>, amount: u64, probe: u64) -> Option<f64> {
+/// ponytail: interim until the SDK exposes an exact amount-free `spot`; one extra kernel
+/// quote per call.
+pub fn marginal_price(quote: impl Fn(u64) -> Option<u64>, amount: u64, out: u64, probe: u64) -> Option<f64> {
     let probe = probe.max(1);
     if amount == 0 {
         return Some(quote(probe)? as f64 / probe as f64);
     }
     let h = (amount / 100).max(probe);
-    let lo = amount.saturating_sub(h);
-    let secant = |a: u64, b: u64| Some((quote(b)? as f64 - quote(a)? as f64) / (b - a) as f64);
-    match amount.checked_add(h) {
-        Some(hi) => secant(lo, hi).or_else(|| secant(lo, amount)),
-        None => secant(lo, amount),
+    let secant = |a: u64, out_a: u64, b: u64, out_b: u64| Some((out_b as f64 - out_a as f64) / (b - a) as f64);
+    match amount.checked_add(h).and_then(|hi| Some((hi, quote(hi)?))) {
+        Some((hi, out_hi)) => secant(amount, out, hi, out_hi),
+        None => {
+            let lo = amount.saturating_sub(h);
+            secant(lo, quote(lo)?, amount, out)
+        },
     }
 }
 
@@ -76,6 +79,10 @@ pub struct LendingVenue {
     controller: Pubkey,
     loaded: Option<Arc<Strategy>>,
     pair: Option<TradablePair>,
+    /// The strategy settled at the clock [`settle`](Self::settle) was given; `None` until
+    /// settled, or when settlement failed at that clock (no route). A quote at any other
+    /// clock settles for itself.
+    kernel: Option<(Now, LendingQuoteKernel)>,
 }
 
 impl LendingVenue {
@@ -85,7 +92,7 @@ impl LendingVenue {
         // The controller account is owned by the Reflect program; the strategy
         // index lives in the controller bytes, read later by the SDK - so the
         // cold seed set needs no index: [controller, pool_registry].
-        Self { program_id: owner, controller: market, loaded: None, pair: None }
+        Self { program_id: owner, controller: market, loaded: None, pair: None, kernel: None }
     }
 
     /// The owning Reflect program id.
@@ -128,6 +135,17 @@ impl LendingVenue {
         self.pair.as_ref().map_or(vec![], |p| vec![p.deposit, p.receipt])
     }
 
+    /// Settle the loaded strategy at `now`: one yield settlement, venue accrual and gate
+    /// evaluation, so every quote is arithmetic over owned state. A settlement that fails
+    /// leaves no kernel, which `quote` reports as no route.
+    ///
+    /// # Errors
+    /// If the venue isn't loaded.
+    pub fn settle(&mut self, now: Now) -> Result<()> {
+        self.kernel = self.loaded()?.lending_kernel(now).ok().map(|k| (now, k));
+        Ok(())
+    }
+
     fn loaded(&self) -> Result<&Strategy> {
         self.loaded.as_deref().context("venue not loaded")
     }
@@ -147,9 +165,27 @@ impl LendingVenue {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
         let pair = self.pair.as_ref().context("no tradable pair")?;
-        let output_mint = if input_mint == pair.deposit.pubkey { pair.receipt.pubkey } else { pair.deposit.pubkey };
-        let q = self.loaded()?.quote(input_mint, output_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
-        // A predicted revert (supply floor / cap) is no route, not a bad route.
+        let fresh;
+        let k = match self.kernel.as_ref() {
+            Some((at, k)) if *at == clock => k,
+            // Quoted at a clock the venue was not settled at: settle for this call.
+            _ => match self.loaded()?.lending_kernel(clock) {
+                Ok(k) => {
+                    fresh = k;
+                    &fresh
+                },
+                Err(_) => return Ok(None),
+            },
+        };
+        let q = if input_mint == pair.deposit.pubkey {
+            k.quote_mint(amount)
+        } else if input_mint == pair.receipt.pubkey {
+            k.quote_redeem(amount)
+        } else {
+            bail!("mint {input_mint} is not in this strategy's pair");
+        }
+        .map_err(|e| anyhow!("quote: {e:?}"))?;
+        // A predicted revert (supply floor / cap / venue limit) is no route, not a bad route.
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: q.fee }))
     }
 
@@ -198,8 +234,8 @@ mod marginal_price_tests {
     #[test]
     fn linear_route_is_constant() {
         let q = |a: u64| Some(a * 3 / 2);
-        assert_eq!(marginal_price(q, 0, 1_000_000), Some(1.5));
-        let m = marginal_price(q, 123_457, 1_000_000).unwrap();
+        assert_eq!(marginal_price(q, 0, 0, 1_000_000), Some(1.5));
+        let m = marginal_price(q, 123_457, q(123_457).unwrap(), 1_000_000).unwrap();
         assert!((m - 1.5).abs() < 1e-3, "{m}");
     }
 
@@ -207,16 +243,17 @@ mod marginal_price_tests {
     #[test]
     fn curved_route_slope_decreases() {
         let q = |a: u64| Some(a - (a as u128 * a as u128 / 1_000_000_000) as u64);
-        let small = marginal_price(q, 1_000_000, 1_000_000).unwrap();
-        let large = marginal_price(q, 100_000_000, 1_000_000).unwrap();
-        assert!(small > large && (small - 0.998).abs() < 1e-3 && (large - 0.8).abs() < 1e-3, "{small} {large}");
+        let small = marginal_price(q, 1_000_000, q(1_000_000).unwrap(), 1_000_000).unwrap();
+        let large = marginal_price(q, 100_000_000, q(100_000_000).unwrap(), 1_000_000).unwrap();
+        // Forward secant over 1%: slope at 1e6 is 0.998, at 1e8 it is 0.8, each minus h/1e9.
+        assert!(small > large && (small - 0.997).abs() < 1e-3 && (large - 0.799).abs() < 1e-3, "{small} {large}");
     }
 
     // Above the cap the upper probe has no route: the secant falls back to the lower side.
     #[test]
     fn capped_route_uses_backward_secant() {
         let q = |a: u64| (a <= 10_000_000).then_some(a * 2);
-        assert_eq!(marginal_price(q, 10_000_000, 1_000_000), Some(2.0));
-        assert_eq!(marginal_price(q, 20_000_000, 1_000_000), None);
+        assert_eq!(marginal_price(q, 10_000_000, 20_000_000, 1_000_000), Some(2.0));
+        assert_eq!(marginal_price(q, 20_000_000, 0, 1_000_000), None);
     }
 }

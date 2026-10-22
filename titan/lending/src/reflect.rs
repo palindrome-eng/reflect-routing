@@ -104,6 +104,7 @@ impl TradingVenue for ReflectLendingVenue {
         let keys = self.venue.discovery_keys(&controller.data, &registry.data).map_err(venue_err)?;
         let datas = cache.get_accounts(&keys).await?;
         self.venue.load(keys.iter().zip(datas).filter_map(|(k, a)| a.map(|a| (*k, a.owner, a.data)))).map_err(venue_err)?;
+        self.venue.settle(self.clock).map_err(venue_err)?;
 
         self.tokens = self.venue.mints().into_iter().map(to_token_info).collect();
 
@@ -132,7 +133,7 @@ impl TradingVenue for ReflectLendingVenue {
         // Titan reads the venue's rate regardless of whether this size fills: the marginal
         // at `amount`, else the spot; `0.0` only when the market has no route at all.
         let probe = 10u64.pow(self.get_token_info().iter().find(|t| t.pubkey == request.input_mint).map_or(0, |t| t.decimals as u32));
-        let price = marginal_price(q, request.amount, probe).or_else(|| marginal_price(q, 0, probe)).unwrap_or(0.0);
+        let price = marginal_price(q, request.amount, expected_output, probe).or_else(|| marginal_price(q, 0, 0, probe)).unwrap_or(0.0);
 
         Ok(QuoteResult {
             input_mint: request.input_mint,

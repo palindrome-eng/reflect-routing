@@ -160,3 +160,25 @@ async fn prod_titan_contract() {
     let v = venue(&fx.svm, fx.pool, vec![fx.asset_mint]).await;
     assert_titan_contract(&mut fx.svm, &v, 0x7174_616e_5345_4544);
 }
+
+// Titan's allocation guard: active in debug builds, where `assert_no_alloc` aborts on a heap
+// allocation inside the guarded closure; release builds (the speed test) run unguarded.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static A: reflect_titan_common::harness::AllocDisabler = reflect_titan_common::harness::AllocDisabler;
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn prod_quotes_do_not_allocate() {
+    let fx = boot_prod();
+    let v = venue(&fx.svm, fx.pool, vec![fx.asset_mint]).await;
+    assert_quotes_do_not_allocate(&v);
+}
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn prod_quote_speed() {
+    let fx = boot_prod();
+    let v = venue(&fx.svm, fx.pool, vec![fx.asset_mint]).await;
+    assert_quote_speed(&v, 0x7174_616e_5345_4544, 1_000.0);
+}

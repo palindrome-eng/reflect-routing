@@ -264,3 +264,25 @@ async fn titan_contract() {
     let mut svm = load_svm(&snap);
     reflect_titan_common::harness::assert_titan_contract(&mut svm, &venue, 0x7174_616e_5345_4544);
 }
+
+// Titan's allocation guard: active in debug builds, where `assert_no_alloc` aborts on a heap
+// allocation inside the guarded closure; release builds (the speed test) run unguarded.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static A: reflect_titan_common::harness::AllocDisabler = reflect_titan_common::harness::AllocDisabler;
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
+async fn quotes_do_not_allocate() {
+    let (venue, _, _, _) = setup().await;
+    reflect_titan_common::harness::assert_quotes_do_not_allocate(&venue);
+}
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
+async fn quote_speed() {
+    let (venue, _, _, _) = setup().await;
+    reflect_titan_common::harness::assert_quote_speed(&venue, 0x7174_616e_5345_4544, 1_000.0);
+}
