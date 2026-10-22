@@ -151,3 +151,12 @@ async fn prod_edges_agree_with_the_program() {
     // The deployed valuation walk maps every oracle failure to InvalidInput.
     assert!(logs.iter().any(|l| l.contains("InvalidInput")), "{logs:?}");
 }
+
+/// Titan's shared correctness contract (upstream `tests/common`) over pool 4: the deposit
+/// direction only, since Swap is crank-only there.
+#[tokio::test(flavor = "current_thread")]
+async fn prod_titan_contract() {
+    let mut fx = boot_prod();
+    let v = venue(&fx.svm, fx.pool, vec![fx.asset_mint]).await;
+    assert_titan_contract(&mut fx.svm, &v, 0x7174_616e_5345_4544);
+}

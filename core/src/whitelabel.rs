@@ -162,11 +162,24 @@ impl WhitelabelVenue {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
         let accts = self.loaded()?;
-        let output_mint = match self.route(input_mint)? {
+        let route = self.route(input_mint)?;
+        let output_mint = match route {
             WhitelabelRoute::Wrap => accts.branded_mint(),
             WhitelabelRoute::Unwrap => accts.stablecoin_mint(),
         };
-        Ok(accts.quote(input_mint, output_mint, amount, clock).ok().map(|q| RouteQuote { amount_out: q.amount_out, fee: 0 }))
+        let Ok(q) = accts.quote(input_mint, output_mint, amount, clock) else {
+            return Ok(None);
+        };
+        // The branded mint's `u64` supply is a ceiling the proxy math does not see: `MintTo`
+        // overflows past it and `Burn` underflows below it. Both are program reverts, so both
+        // are "no route" here, which keeps `bounds()` inside what executes.
+        // ponytail: lives here until the SDK's wrap/unwrap quotes model the SPL supply ceiling.
+        let supply = accts.state(clock).map_err(|e| anyhow!("state: {e:?}"))?.vault.branded_supply;
+        let executes = match route {
+            WhitelabelRoute::Wrap => supply.checked_add(q.amount_out).is_some(),
+            WhitelabelRoute::Unwrap => amount <= supply,
+        };
+        Ok(executes.then_some(RouteQuote { amount_out: q.amount_out, fee: 0 }))
     }
 
     /// Build the wrap/unwrap instruction; `min_out` is baked from

@@ -173,3 +173,18 @@ async fn staging_edges_agree_with_the_program() {
     let stale = Clock { unix_timestamp: fx.clock.unix_timestamp + 600, ..fx.clock.clone() };
     edges(&mut fx, stale, "custom program error: 0xd").await;
 }
+
+/// Titan's shared correctness contract (upstream `tests/common`), both markets.
+#[tokio::test(flavor = "current_thread")]
+async fn prod_titan_contract() {
+    let mut fx = boot("proxy_prod", PROXY_PROGRAM);
+    let v = fx.venue().await;
+    assert_titan_contract(&mut fx.svm, &v, 0x7174_616e_5345_4544);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn staging_titan_contract() {
+    let mut fx = boot("proxy_staging", PROXY_STAGING_PROGRAM);
+    let v = fx.venue().await;
+    assert_titan_contract(&mut fx.svm, &v, 0x7174_616e_5345_4544);
+}

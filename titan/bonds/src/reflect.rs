@@ -86,6 +86,20 @@ impl TradingVenue for ReflectBondVenue {
         &self.tokens
     }
 
+    /// Every pair the basket can quote NOW. A slot with an empty vault cannot pay a redeem
+    /// or a swap into it, so those pairs are a predicted revert at any size and must not be
+    /// declared: Titan's `bounds()` demands a quotable range for each declared direction.
+    fn directions_num(&self) -> Vec<(u8, u8)> {
+        let n = self.tokens.len() as u8;
+        (0..n)
+            .flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j)))
+            .filter(|&(i, j)| {
+                let (a, b) = (&self.tokens[i as usize], &self.tokens[j as usize]);
+                matches!(self.venue.quote(a.pubkey, b.pubkey, 10u64.pow(a.decimals as u32), self.clock), Ok(Some(_)))
+            })
+            .collect()
+    }
+
     fn get_required_pubkeys_for_update(&self) -> Result<Vec<Pubkey>, TradingVenueError> {
         Ok(self.keys.clone())
     }

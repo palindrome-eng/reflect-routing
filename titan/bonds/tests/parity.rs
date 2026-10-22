@@ -255,3 +255,12 @@ async fn edges_zero_and_overask() {
     let usdc = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[0], amount: 1_000, swap_type: SwapType::ExactIn }).expect("usdc quote");
     assert!(usdc.not_enough_liquidity, "redeem into the empty slot-0 pool must flag no-liquidity");
 }
+
+/// Titan's shared correctness contract (upstream `tests/common`) over the forged basket.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "RED until the SDK redeem quote predicts the deposited_vault_value underflow at the max burn (autocompound.rs process_redemption): bounds() reaches 180M receipt and the program throws MathError; needs the forge fixtures too"]
+async fn titan_contract() {
+    let (venue, snap, _, _) = setup().await;
+    let mut svm = load_svm(&snap);
+    reflect_titan_common::harness::assert_titan_contract(&mut svm, &venue, 0x7174_616e_5345_4544);
+}

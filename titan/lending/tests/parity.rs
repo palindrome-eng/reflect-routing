@@ -380,3 +380,12 @@ async fn offline_snapshot_cache_contract() {
     assert!(got[1].is_none(), "missing account must be Ok(None), not an error");
     assert!(cache.get_account(&b).await.unwrap().is_none());
 }
+
+/// Titan's shared correctness contract (upstream `tests/common`) over the forged market.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "RED until the SDK mint quote predicts Save's reserve deposit_limit revert: bounds() reaches 1e15 USDC and the program refuses it; needs the forge fixtures too"]
+async fn titan_contract() {
+    let (venue, snap, _, _) = setup().await;
+    let mut svm = load_svm(&snap, &resolve_programs());
+    reflect_titan_common::harness::assert_titan_contract(&mut svm, &venue, 0x7174_616e_5345_4544);
+}
