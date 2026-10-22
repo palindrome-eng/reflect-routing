@@ -10,6 +10,7 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
+use reflect_sdk::core::main::tvl::mint_supply;
 use reflect_sdk::strategy::{index_discovery_keys, pda, FetchedAccount, Strategy, TokenInput};
 
 pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
@@ -31,13 +32,15 @@ pub struct BondVenue {
     controller: Pubkey,
     loaded: Option<Arc<Strategy>>,
     mints: Option<IndexMints>,
+    /// Receipt mint supply at load: the ceiling on a redeem burn.
+    receipt_supply: u64,
 }
 
 impl BondVenue {
     /// Construct cold from the market account the aggregator lists: `market` is
     /// its key, `owner` its program id.
     pub fn from_market(market: Pubkey, owner: Pubkey) -> Self {
-        Self { program_id: owner, controller: market, loaded: None, mints: None }
+        Self { program_id: owner, controller: market, loaded: None, mints: None, receipt_supply: 0 }
     }
 
     /// The owning Reflect program id.
@@ -75,9 +78,11 @@ impl BondVenue {
     /// every bond basket has assets, so a bond controller with unreadable
     /// mints is a malformed market, not a legitimate empty one.
     pub fn load(&mut self, accounts: impl IntoIterator<Item = (Pubkey, Pubkey, Vec<u8>)>) -> Result<()> {
-        let bytes = accounts.into_iter().map(|(key, owner, data)| FetchedAccount { key, owner, data }).collect();
+        let bytes: Vec<FetchedAccount> = accounts.into_iter().map(|(key, owner, data)| FetchedAccount { key, owner, data }).collect();
+        let supplies: Vec<(Pubkey, u64)> = bytes.iter().filter_map(|a| mint_supply(&a.data).ok().map(|s| (a.key, s))).collect();
         let accts = Strategy::from_accounts(self.program_id, self.controller, bytes).map_err(|e| anyhow!("from_accounts: {e:?}"))?;
         let mints = accts.index_mints().map_err(|e| anyhow!("index_mints: {e:?}"))?;
+        self.receipt_supply = supplies.iter().find(|(k, _)| *k == mints.receipt.pubkey).map(|(_, s)| *s).context("receipt mint account missing")?;
         self.mints = Some(mints);
         self.loaded = Some(Arc::new(accts));
         Ok(())
@@ -122,6 +127,11 @@ impl BondVenue {
     pub fn quote(&self, input_mint: Pubkey, output_mint: Pubkey, amount: u64, clock: Now) -> Result<Option<RouteQuote>> {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
+        }
+        // A burn above the receipt supply is a request nobody can hold; the program's
+        // `process_redemption` underflows on it before the SPL burn would. No route.
+        if matches!(self.route(input_mint, output_mint)?, IndexRoute::RedeemByReceipt { .. }) && amount > self.receipt_supply {
+            return Ok(None);
         }
         let q = self.loaded()?.quote(input_mint, output_mint, amount, clock).map_err(|e| anyhow!("quote: {e:?}"))?;
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: 0 }))

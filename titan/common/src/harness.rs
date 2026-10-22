@@ -254,7 +254,10 @@ pub fn simulate_delta(svm: &LiteSVM, venue: &dyn TradingVenue, user: &Keypair, r
     let dst = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &req.output_mint, &out_program);
     let before = token_balance(svm, &dst);
     let ix = venue.generate_swap_instruction(req, user.pubkey()).ok()?;
-    let tx = SdkTransaction::new_signed_with_payer(&[ix], Some(&user.pubkey()), &[user], svm.latest_blockhash());
+    // Upstream simulates under a 1.4M CU budget; a lending mint with its venue CPI exceeds
+    // the runtime's 200k default.
+    let budget = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    let tx = SdkTransaction::new_signed_with_payer(&[budget, ix], Some(&user.pubkey()), &[user], svm.latest_blockhash());
     match svm.simulate_transaction(tx) {
         Ok(info) => {
             let post = info.post_accounts.iter().find(|(k, _)| *k == dst).map(|(_, a)| a.data()[64..72].try_into().map(u64::from_le_bytes).unwrap())?;

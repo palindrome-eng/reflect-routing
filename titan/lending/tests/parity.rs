@@ -383,7 +383,7 @@ async fn offline_snapshot_cache_contract() {
 
 /// Titan's shared correctness contract (upstream `tests/common`) over the forged market.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "RED until the SDK mint quote predicts Save's reserve deposit_limit revert: bounds() reaches 1e15 USDC and the program refuses it; needs the forge fixtures too"]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn titan_contract() {
     let (venue, snap, _, _) = setup().await;
     let mut svm = load_svm(&snap, &resolve_programs());

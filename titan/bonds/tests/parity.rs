@@ -258,7 +258,7 @@ async fn edges_zero_and_overask() {
 
 /// Titan's shared correctness contract (upstream `tests/common`) over the forged basket.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "RED until the SDK redeem quote predicts the deposited_vault_value underflow at the max burn (autocompound.rs process_redemption): bounds() reaches 180M receipt and the program throws MathError; needs the forge fixtures too"]
+#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn titan_contract() {
     let (venue, snap, _, _) = setup().await;
     let mut svm = load_svm(&snap);
