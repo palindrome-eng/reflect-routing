@@ -15,10 +15,10 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyQuoteKernel, ProxyStateView, Whitelabel};
+use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyCore, ProxyStateView, Whitelabel};
 use reflect_sdk::strategy::MintInfo;
 
-use crate::{spl_mint_info, RouteQuote};
+use crate::{spl_mint_info, RouteQuote, Settled};
 
 /// Which branded-pair op an input mint maps to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,17 +44,15 @@ pub struct WhitelabelVenue {
     market: Pubkey,
     loaded: Option<Arc<Whitelabel>>,
     mints: Option<[MintInfo; 2]>, // [stablecoin (idx 0), branded (idx 1)]
-    /// The market settled at the clock [`settle`](Self::settle) was given; `None` until
-    /// settled, or when the price did not resolve at that clock (stale: no route). A quote
-    /// at any other clock settles for itself.
-    kernel: Option<(Now, ProxyQuoteKernel)>,
+    /// The market settled for quoting; see [`Settled`].
+    core: Settled<ProxyCore>,
 }
 
 impl WhitelabelVenue {
     /// Construct cold from the `ProxyState` account the aggregator lists:
     /// `market` is its key, `program_id` its owner (mainnet or staging proxy).
     pub fn from_market(program_id: Pubkey, market: Pubkey) -> Self {
-        Self { program_id, market, loaded: None, mints: None, kernel: None }
+        Self { program_id, market, loaded: None, mints: None, core: Settled::NONE }
     }
 
     /// The owning proxy program id.
@@ -141,13 +139,13 @@ impl WhitelabelVenue {
     }
 
     /// Settle the loaded market at `now`: resolves the oracle chain once so every quote is
-    /// arithmetic over owned state. A price that does not resolve leaves no kernel, which
+    /// arithmetic over owned state. A price that does not resolve leaves no core, which
     /// `quote` reports as no route.
     ///
     /// # Errors
     /// If the venue isn't loaded.
     pub fn settle(&mut self, now: Now) -> Result<()> {
-        self.kernel = self.loaded()?.kernel(now).ok().map(|k| (now, k));
+        self.core.set(now, self.loaded()?.core(now).ok());
         Ok(())
     }
 
@@ -163,7 +161,7 @@ impl WhitelabelVenue {
         }
     }
 
-    /// Quote `amount` of `input_mint` into its counterpart, ExactIn, from the kernel
+    /// Quote `amount` of `input_mint` into its counterpart, ExactIn, from the core
     /// [`settle`](Self::settle) left. `None` is "no route": the SDK predicts the revert the
     /// program would raise, or the market is unsettled at this clock.
     /// `amount == 0` returns `Some(zero)` before touching state.
@@ -177,20 +175,9 @@ impl WhitelabelVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
-        self.loaded()?;
+        let loaded = self.loaded()?;
         let route = self.route(input_mint)?;
-        let fresh;
-        let k = match self.kernel.as_ref() {
-            Some((at, k)) if *at == clock => k,
-            // Quoted at a clock the venue was not settled at: settle for this call.
-            _ => match self.loaded()?.kernel(clock) {
-                Ok(k) => {
-                    fresh = k;
-                    &fresh
-                },
-                Err(_) => return Ok(None),
-            },
-        };
+        let Some(k) = self.core.at(clock, || loaded.core(clock).ok()) else { return Ok(None) };
         // The branded mint's `u64` supply is a ceiling the proxy math does not see: `MintTo`
         // overflows past it and `Burn` underflows below it. Both are program reverts, so both
         // are "no route" here, which keeps `bounds()` inside what executes.

@@ -19,10 +19,10 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::rlp::{asset_keys, decode_asset_registry, pda, state_keys, AssetView, FetchedAccount, InsurancePool, LiquidityPoolView, RlpQuoteKernel};
+use reflect_sdk::rlp::{asset_keys, decode_asset_registry, pda, state_keys, AssetView, FetchedAccount, InsurancePool, LiquidityPoolView, RlpCore};
 use reflect_sdk::strategy::MintInfo;
 
-use crate::{spl_mint_info, RouteQuote};
+use crate::{spl_mint_info, RouteQuote, Settled};
 
 /// Which routable rlp op a mint pair maps to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,9 +41,8 @@ pub struct RlpVenue {
     asset_mints: Vec<Pubkey>,
     loaded: Option<Arc<InsurancePool>>,
     mints: Vec<MintInfo>, // [lp (idx 0), public asset_0..n in pool order] - mints[1..] IS the public set
-    /// The pool settled at the clock [`settle`](Self::settle) was given for a public caller;
-    /// `None` until settled, or when settlement failed at that clock (no route).
-    kernel: Option<(Now, RlpQuoteKernel)>,
+    /// The pool settled for a public caller; see [`Settled`].
+    core: Settled<RlpCore>,
 }
 
 impl RlpVenue {
@@ -51,7 +50,7 @@ impl RlpVenue {
     /// `market` is its key, `program_id` its owner (mainnet or staging rlp),
     /// `asset_mints` the pool's asset mints.
     pub fn from_market(program_id: Pubkey, market: Pubkey, asset_mints: Vec<Pubkey>) -> Self {
-        Self { program_id, market, asset_mints, loaded: None, mints: vec![], kernel: None }
+        Self { program_id, market, asset_mints, loaded: None, mints: vec![], core: Settled::NONE }
     }
 
     /// The owning rlp program id.
@@ -186,20 +185,9 @@ impl RlpVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
-        self.loaded()?;
+        let loaded = self.loaded()?;
         let route = self.route(input_mint, output_mint)?;
-        let fresh;
-        let k = match self.kernel.as_ref() {
-            Some((at, k)) if *at == clock => k,
-            // Quoted at a clock the venue was not settled at: settle for this call.
-            _ => match self.loaded()?.kernel(clock) {
-                Ok(k) => {
-                    fresh = k;
-                    &fresh
-                },
-                Err(_) => return Ok(None),
-            },
-        };
+        let Some(k) = self.core.at(clock, || loaded.core(clock).ok()) else { return Ok(None) };
         Ok(match route {
             RlpRoute::Deposit => k.quote_deposit(&input_mint, amount).ok().map(|q| RouteQuote { amount_out: q.lp_out, fee: 0 }),
             RlpRoute::Swap => k.quote_swap(&input_mint, &output_mint, amount).ok().map(|out| {
@@ -212,12 +200,12 @@ impl RlpVenue {
 
     /// Settle the loaded pool at `now` for a public caller: every asset priced and the pool
     /// valued once, so each quote is arithmetic over owned state. A settlement that fails
-    /// leaves no kernel, which `quote` reports as no route.
+    /// leaves no core, which `quote` reports as no route.
     ///
     /// # Errors
     /// If the venue isn't loaded.
     pub fn settle(&mut self, now: Now) -> Result<()> {
-        self.kernel = self.loaded()?.kernel(now).ok().map(|k| (now, k));
+        self.core.set(now, self.loaded()?.core(now).ok());
         Ok(())
     }
 

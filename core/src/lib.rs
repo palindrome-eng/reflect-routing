@@ -7,6 +7,7 @@ mod bonds;
 mod rlp;
 mod whitelabel;
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -15,12 +16,36 @@ use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
 use reflect_sdk::common::Now;
-use reflect_sdk::strategy::{lending_discovery_keys, pda, FetchedAccount, LendingQuoteKernel, Strategy, TradablePair};
+use reflect_sdk::strategy::{lending_discovery_keys, pda, FetchedAccount, LendingCore, Strategy, TradablePair};
 
 pub use bonds::BondVenue;
 pub use reflect_sdk::strategy::{IndexMints, IndexRoute, MintInfo};
 pub use rlp::{RlpRoute, RlpVenue};
 pub use whitelabel::{WhitelabelRoute, WhitelabelVenue};
+
+/// A product core settled at one clock, kept by a venue between quotes. A quote at that clock
+/// reads it; a quote at any other clock settles for itself (the Jupiter adapters pass their own
+/// clock per quote).
+#[derive(Clone)]
+pub(crate) struct Settled<K>(Option<(Now, K)>);
+
+impl<K: Clone> Settled<K> {
+    pub(crate) const NONE: Self = Self(None);
+
+    /// Keep `core` for `now`; `None` (a failed settlement) keeps nothing, so `at` reports no
+    /// route at that clock.
+    pub(crate) fn set(&mut self, now: Now, core: Option<K>) {
+        self.0 = core.map(|k| (now, k));
+    }
+
+    /// The core at `clock`: the kept one when the clocks match, else `settle()`'s.
+    pub(crate) fn at(&self, clock: Now, settle: impl FnOnce() -> Option<K>) -> Option<Cow<'_, K>> {
+        match &self.0 {
+            Some((at, k)) if *at == clock => Some(Cow::Borrowed(k)),
+            _ => settle().map(Cow::Owned),
+        }
+    }
+}
 
 /// Decode an SPL mint account fetched alongside a venue's account set.
 pub(crate) fn spl_mint_info(mint: Pubkey, fetched: &[(Pubkey, Pubkey, Vec<u8>)]) -> Result<MintInfo> {
@@ -46,7 +71,7 @@ pub struct RouteQuote {
 /// secant on a concave curve sits between the true slope and the chord Titan checks it
 /// against. `None` when no probe quotes.
 ///
-/// ponytail: interim until the SDK exposes an exact amount-free `spot`; one extra kernel
+/// ponytail: interim until the SDK exposes an exact amount-free `spot`; one extra core
 /// quote per call.
 pub fn marginal_price(quote: impl Fn(u64) -> Option<u64>, amount: u64, out: u64, probe: u64) -> Option<f64> {
     let probe = probe.max(1);
@@ -79,10 +104,8 @@ pub struct LendingVenue {
     controller: Pubkey,
     loaded: Option<Arc<Strategy>>,
     pair: Option<TradablePair>,
-    /// The strategy settled at the clock [`settle`](Self::settle) was given; `None` until
-    /// settled, or when settlement failed at that clock (no route). A quote at any other
-    /// clock settles for itself.
-    kernel: Option<(Now, LendingQuoteKernel)>,
+    /// The strategy settled for quoting; see [`Settled`].
+    core: Settled<LendingCore>,
 }
 
 impl LendingVenue {
@@ -92,7 +115,7 @@ impl LendingVenue {
         // The controller account is owned by the Reflect program; the strategy
         // index lives in the controller bytes, read later by the SDK - so the
         // cold seed set needs no index: [controller, pool_registry].
-        Self { program_id: owner, controller: market, loaded: None, pair: None, kernel: None }
+        Self { program_id: owner, controller: market, loaded: None, pair: None, core: Settled::NONE }
     }
 
     /// The owning Reflect program id.
@@ -137,12 +160,12 @@ impl LendingVenue {
 
     /// Settle the loaded strategy at `now`: one yield settlement, venue accrual and gate
     /// evaluation, so every quote is arithmetic over owned state. A settlement that fails
-    /// leaves no kernel, which `quote` reports as no route.
+    /// leaves no core, which `quote` reports as no route.
     ///
     /// # Errors
     /// If the venue isn't loaded.
     pub fn settle(&mut self, now: Now) -> Result<()> {
-        self.kernel = self.loaded()?.lending_kernel(now).ok().map(|k| (now, k));
+        self.core.set(now, self.loaded()?.lending_core(now).ok());
         Ok(())
     }
 
@@ -165,18 +188,8 @@ impl LendingVenue {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
         let pair = self.pair.as_ref().context("no tradable pair")?;
-        let fresh;
-        let k = match self.kernel.as_ref() {
-            Some((at, k)) if *at == clock => k,
-            // Quoted at a clock the venue was not settled at: settle for this call.
-            _ => match self.loaded()?.lending_kernel(clock) {
-                Ok(k) => {
-                    fresh = k;
-                    &fresh
-                },
-                Err(_) => return Ok(None),
-            },
-        };
+        let loaded = self.loaded()?;
+        let Some(k) = self.core.at(clock, || loaded.lending_core(clock).ok()) else { return Ok(None) };
         let q = if input_mint == pair.deposit.pubkey {
             k.quote_mint(amount)
         } else if input_mint == pair.receipt.pubkey {
