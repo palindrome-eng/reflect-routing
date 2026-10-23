@@ -14,4 +14,5 @@
 pub mod account_caching;
 #[cfg(feature = "harness")]
 pub mod harness;
+pub mod swap_route;
 pub mod trading_venue;
