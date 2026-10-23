@@ -1,0 +1,31 @@
+[package]
+name = "reflect-titan-router"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Titan's titan-v3-venue-template route program with the Reflect venue adapters: every leg loads, quotes and builds through reflect-sdk in place and is invoked as TitanPDA."
+
+# Anchor's macros reference cfgs (`anchor-debug`, ...) that are not Cargo features.
+[lints.rust]
+unexpected_cfgs = "allow"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "reflect_titan_router"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = "=0.31.1"
+anchor-spl = "0.31.1"
+reflect-sdk = { workspace = true, features = ["anchor-v0"] }
+
+[dev-dependencies]
+reflect-titan-common = { path = "../common" }
+solana-pubkey = "2.2"
