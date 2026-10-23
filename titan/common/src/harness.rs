@@ -412,3 +412,106 @@ pub fn assert_quote_speed<V: TradingVenue>(venue: &V, seed: u64, max_avg_ns: f64
         assert!(avg_ns < max_avg_ns, "{in_mint}->{out_mint}: {avg_ns:.0} ns per quote exceeds {max_avg_ns:.0} ns");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Routed execution: the venue's leg inside the route program under TitanPDA custody.
+// ---------------------------------------------------------------------------
+
+use crate::swap_route::{build_swap_leg, encode_swap_route_v3_data, titan_pda, ROUTER_PROGRAM_ID, ROUTE_WEIGHT_ALL, TITAN_PDA_DISC};
+
+/// The route program from `TITAN_ROUTER_SO`, else the workspace's
+/// `cargo build-sbf --manifest-path titan/program/Cargo.toml` output; `None` until built.
+pub fn router_program() -> Option<Vec<u8>> {
+    let path = std::env::var_os("TITAN_ROUTER_SO").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/reflect_titan_router.so"));
+    std::fs::read(path).ok()
+}
+
+/// TitanPDA balances that must survive every route untouched.
+const RESERVED_IN: u64 = 17;
+const RESERVED_OUT: u64 = 29;
+
+fn token_program_of(venue: &dyn TradingVenue, mint: Pubkey) -> Pubkey {
+    if venue.get_token_info().iter().find(|t| t.pubkey == mint).expect("mint in venue").is_token_2022 {
+        spl_token_2022::ID
+    } else {
+        spl_token::ID
+    }
+}
+
+fn forge_token(svm: &mut LiteSVM, owner: &Pubkey, mint: &Pubkey, program: &Pubkey, amount: u64) -> Pubkey {
+    let key = spl_associated_token_account::get_associated_token_address_with_program_id(owner, mint, program);
+    svm.set_account(key, Account { lamports: 10_000_000, data: token_account_bytes(mint, owner, amount), owner: *program, executable: false, rent_epoch: 0 }).unwrap();
+    key
+}
+
+fn post_balance(info: &litesvm::types::SimulatedTransactionInfo, key: &Pubkey) -> u64 {
+    info.post_accounts.iter().find(|(k, _)| k == key).map(|(_, a)| u64::from_le_bytes(a.data()[64..72].try_into().unwrap())).expect("account in simulation")
+}
+
+/// Route every declared direction of `venue` through `swap_route_v3` as one leg, simulated
+/// (never committed) at the lower bound, the midpoint and the upper bound: a leg floor one atom
+/// above the quote is refused with `MinimumOutput`; at the quote the user receives exactly the
+/// quoted output, the input is fully spent and TitanPDA's reserved balances are intact.
+pub fn assert_titan_route<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, router: &[u8]) {
+    svm.add_program(ROUTER_PROGRAM_ID, router);
+    let (titan, bump) = titan_pda();
+    let mut data = TITAN_PDA_DISC.to_vec();
+    data.push(bump);
+    svm.set_account(titan, Account { lamports: 10_000_000, data, owner: ROUTER_PROGRAM_ID, executable: false, rent_epoch: 0 }).unwrap();
+    let user = funded_user(svm);
+
+    for (i, j) in venue.directions_num() {
+        let (in_mint, out_mint) = (venue.get_token(i as usize).unwrap().pubkey, venue.get_token(j as usize).unwrap().pubkey);
+        let (in_program, out_program) = (token_program_of(venue, in_mint), token_program_of(venue, out_mint));
+        let dir = format!("{in_mint}->{out_mint}");
+        let (lb, ub) = venue.bounds(i, j).unwrap_or_else(|e| panic!("{dir}: bounds failed: {e:?}"));
+        for amount in [lb, lb + (ub - lb) / 2, ub] {
+            let req = exact_in(in_mint, out_mint, amount);
+            let q = venue.quote(req.clone()).unwrap_or_else(|e| panic!("{dir}: quote at {amount} errored: {e:?}"));
+            assert!(valid(&q), "{dir}: {amount} inside bounds must quote");
+            let user_in = forge_token(svm, &user.pubkey(), &in_mint, &in_program, amount);
+            let user_out = forge_token(svm, &user.pubkey(), &out_mint, &out_program, 0);
+            let titan_in = forge_token(svm, &titan, &in_mint, &in_program, RESERVED_IN);
+            let titan_out = forge_token(svm, &titan, &out_mint, &out_program, RESERVED_OUT);
+
+            let route = |min_out: u64| {
+                let (leg, leg_accounts) = build_swap_leg(venue, &req, titan, 0, 1, ROUTE_WEIGHT_ALL, min_out).unwrap_or_else(|e| panic!("{dir}: leg build failed: {e:?}"));
+                let ro = |k: Pubkey| solana_sdk::instruction::AccountMeta::new_readonly(k, false);
+                let rw = |k: Pubkey| solana_sdk::instruction::AccountMeta::new(k, false);
+                let mut accounts = vec![
+                    solana_sdk::instruction::AccountMeta::new(user.pubkey(), true),
+                    solana_sdk::instruction::AccountMeta::new(user.pubkey(), true),
+                    ro(titan),
+                    rw(user_in),
+                    rw(user_out),
+                    ro(spl_token::ID),
+                    ro(spl_token_2022::ID),
+                    ro(solana_sdk::system_program::ID),
+                    ro(spl_associated_token_account::ID),
+                    // Anchor optional accounts: the program id is the none placeholder.
+                    ro(ROUTER_PROGRAM_ID),
+                    ro(ROUTER_PROGRAM_ID),
+                    ro(ROUTER_PROGRAM_ID),
+                    rw(titan_in),
+                    rw(titan_out),
+                    ro(in_mint),
+                    ro(out_mint),
+                ];
+                accounts.extend(leg_accounts);
+                let ix = Instruction { program_id: ROUTER_PROGRAM_ID, accounts, data: encode_swap_route_v3_data(amount, 2, &[leg]) };
+                let budget = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+                SdkTransaction::new_signed_with_payer(&[budget, ix], Some(&user.pubkey()), &[&user], svm.latest_blockhash())
+            };
+
+            let refused = svm.simulate_transaction(route(q.expected_output + 1)).expect_err(&format!("{dir}: a floor above the quote must be refused at {amount}"));
+            assert!(refused.meta.logs.iter().any(|l| l.contains("MinimumOutput")), "{dir}: refused for another reason at {amount}:\n{}", refused.meta.logs.join("\n"));
+
+            let info = svm.simulate_transaction(route(q.expected_output)).unwrap_or_else(|e| panic!("{dir}: route failed at {amount}:\n{}\n{:?}", e.meta.logs.join("\n"), e.err));
+            assert_eq!(post_balance(&info, &user_out), q.expected_output, "{dir}: user output != quote at {amount}");
+            assert_eq!(post_balance(&info, &user_in), 0, "{dir}: input not fully spent at {amount}");
+            assert!(post_balance(&info, &titan_in) >= RESERVED_IN, "{dir}: TitanPDA input custody drained at {amount}");
+            assert_eq!(post_balance(&info, &titan_out), RESERVED_OUT, "{dir}: TitanPDA output custody changed at {amount}");
+            eprintln!("titan route: {dir} ok at {amount} ({} CU)", info.meta.compute_units_consumed);
+        }
+    }
+}
