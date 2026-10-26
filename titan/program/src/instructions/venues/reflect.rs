@@ -43,10 +43,19 @@ pub fn build(venue: &Venue, leg: &Leg, infos: &[AccountInfo]) -> Result<BuiltIns
     let now = Now { slot: clock.slot, unix_timestamp: clock.unix_timestamp };
     let user = leg.titan_pda;
 
+    let allowed: &[Pubkey] = match venue {
+        Venue::ReflectLending { .. } | Venue::ReflectBonds { .. } => &REFLECT_PROGRAMS,
+        Venue::ReflectRlp { .. } => &RLP_PROGRAMS,
+        Venue::ReflectWhitelabel { .. } => &PROXY_PROGRAMS,
+        Venue::RaydiumAmm => return err!(TemplateError::InvalidSwapInput),
+    };
+    // Pinned before any leg byte is read: an unknown program never gets its accounts decoded.
+    require!(allowed.contains(&program_id), TemplateError::VenueProgram);
+
     // Each arm loads, quotes and builds inside its own block so every account borrow the loader
     // holds is released before the dispatcher invokes.
-    let (allowed, built): (&[Pubkey], BuiltInstruction) = match venue {
-        Venue::ReflectLending { .. } => (&REFLECT_PROGRAMS, {
+    let built = match venue {
+        Venue::ReflectLending { .. } => {
             let s = Strategy::from_infos(program_id, key(LENDING_CONTROLLER)?, infos)?;
             let h = s.lending(user)?;
             if leg.in_mint == s.receipt_mint() {
@@ -54,8 +63,8 @@ pub fn build(venue: &Venue, leg: &Leg, infos: &[AccountInfo]) -> Result<BuiltIns
             } else {
                 h.mint(leg.amount, CPI_SLIPPAGE_BPS, now)?.1
             }
-        }),
-        Venue::ReflectBonds { .. } => (&REFLECT_PROGRAMS, {
+        },
+        Venue::ReflectBonds { .. } => {
             let s = Strategy::from_infos(program_id, key(INDEX_CONTROLLER)?, infos)?;
             let h = s.index(user)?;
             match s.index_route(leg.in_mint, leg.out_mint)? {
@@ -67,8 +76,8 @@ pub fn build(venue: &Venue, leg: &Leg, infos: &[AccountInfo]) -> Result<BuiltIns
                     h.redeem_by_receipt(leg.amount, &[TokenInput { asset_id: out_asset_id, amount: u64::MAX }], CPI_SLIPPAGE_BPS, now)?.1
                 },
             }
-        }),
-        Venue::ReflectRlp { .. } => (&RLP_PROGRAMS, {
+        },
+        Venue::ReflectRlp { .. } => {
             let pool_index = {
                 let pool = infos.get(RLP_POOL).ok_or(TemplateError::MissingRemainingAccount)?;
                 let data = pool.try_borrow_data()?;
@@ -80,17 +89,16 @@ pub fn build(venue: &Venue, leg: &Leg, infos: &[AccountInfo]) -> Result<BuiltIns
             } else {
                 p.swap(user, leg.in_mint, leg.out_mint, leg.amount, CPI_SLIPPAGE_BPS, now)?.1
             }
-        }),
-        Venue::ReflectWhitelabel { .. } => (&PROXY_PROGRAMS, {
+        },
+        Venue::ReflectWhitelabel { .. } => {
             let w = Whitelabel::from_infos(program_id, key(PROXY_BRANDED_MINT)?, infos)?;
             if leg.in_mint == w.stablecoin_mint() {
                 w.wrap(user, leg.amount, CPI_SLIPPAGE_BPS, now)?.1
             } else {
                 w.unwrap(user, leg.amount, CPI_SLIPPAGE_BPS, now)?.1
             }
-        }),
+        },
         Venue::RaydiumAmm => return err!(TemplateError::InvalidSwapInput),
     };
-    require!(allowed.contains(&program_id), TemplateError::VenueProgram);
     Ok(built)
 }

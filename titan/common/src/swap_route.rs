@@ -119,36 +119,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn venue_borsh_bytes_are_stable() {
-        assert_eq!(Venue::RaydiumAmm.to_borsh_bytes(), vec![0]);
-        for (tag, v) in [
-            (1u8, Venue::ReflectLending { min_out: 7 }),
-            (2, Venue::ReflectBonds { min_out: 7 }),
-            (3, Venue::ReflectRlp { min_out: 7 }),
-            (4, Venue::ReflectWhitelabel { min_out: 7 }),
-        ] {
-            let mut expected = vec![tag];
-            expected.extend_from_slice(&7u64.to_le_bytes());
-            assert_eq!(v.to_borsh_bytes(), expected);
-        }
-    }
-
-    #[test]
-    fn encodes_instruction_data_like_anchor() {
-        let spec = SwapSpecInputV2 { venue: Venue::ReflectRlp { min_out: 5 }, from: 0, to: 1, weight_nanos: ROUTE_WEIGHT_ALL, n_accounts: 3 };
-        let mut expected = vec![SWAP_ROUTE_V3_DISCRIMINATOR];
-        expected.extend_from_slice(&5_000u64.to_le_bytes());
-        expected.push(2);
-        expected.extend_from_slice(&1u32.to_le_bytes());
-        expected.push(3);
-        expected.extend_from_slice(&5u64.to_le_bytes());
-        expected.extend_from_slice(&[0, 1]);
-        expected.extend_from_slice(&ROUTE_WEIGHT_ALL.to_le_bytes());
-        expected.push(3);
-        assert_eq!(encode_swap_route_v3_data(5_000, 2, &[spec]), expected);
-    }
-
-    #[test]
     fn leg_accounts_clear_titan_signer_and_append_program() {
         let titan = Pubkey::new_unique();
         let venue_program = Pubkey::new_unique();

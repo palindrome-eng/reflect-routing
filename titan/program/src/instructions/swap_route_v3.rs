@@ -369,7 +369,13 @@ fn create_user_ata<'info>(
     .map_err(Into::into)
 }
 
-fn close_titan_pda_ata<'info>(ata: &AccountInfo<'info>, destination: &AccountInfo<'info>, titan_pda: &AccountInfo<'info>, token_program: &AccountInfo<'info>, signer_seeds: &[&[&[u8]]]) -> Result<()> {
+fn close_titan_pda_ata<'info>(
+    ata: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    titan_pda: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
     close_account(CpiContext::new_with_signer(
         token_program.to_account_info(),
         CloseAccount { account: ata.to_account_info(), destination: destination.to_account_info(), authority: titan_pda.to_account_info() },

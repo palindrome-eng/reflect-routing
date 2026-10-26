@@ -249,9 +249,7 @@ fn exact_in(input_mint: Pubkey, output_mint: Pubkey, amount: u64) -> QuoteReques
 /// Simulate the venue's instruction for `req` as `user` WITHOUT committing state and return the
 /// out-mint balance delta, or `None` with the logs printed when the program refuses it.
 pub fn simulate_delta(svm: &LiteSVM, venue: &dyn TradingVenue, user: &Keypair, req: QuoteRequest) -> Option<u64> {
-    let out_token = venue.get_token_info().iter().find(|t| t.pubkey == req.output_mint).expect("output mint in venue");
-    let out_program = if out_token.is_token_2022 { spl_token_2022::ID } else { spl_token::ID };
-    let dst = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &req.output_mint, &out_program);
+    let dst = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &req.output_mint, &token_program_of(venue, req.output_mint));
     let before = token_balance(svm, &dst);
     let ix = venue.generate_swap_instruction(req, user.pubkey()).ok()?;
     // Upstream simulates under a 1.4M CU budget; a lending mint with its venue CPI exceeds
@@ -276,11 +274,20 @@ pub fn simulate_delta(svm: &LiteSVM, venue: &dyn TradingVenue, user: &Keypair, r
 /// destination is empty, so only the venue's own ceilings bound the sweep.
 pub fn fund_direction(svm: &mut LiteSVM, user: &Keypair, venue: &dyn TradingVenue, in_mint: Pubkey, out_mint: Pubkey) {
     for (mint, amount) in [(in_mint, u64::MAX), (out_mint, 0)] {
-        let t = venue.get_token_info().iter().find(|t| t.pubkey == mint).expect("mint in venue");
-        let program = if t.is_token_2022 { spl_token_2022::ID } else { spl_token::ID };
-        let key = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &mint, &program);
-        svm.set_account(key, Account { lamports: 10_000_000, data: token_account_bytes(&mint, &user.pubkey(), amount), owner: program, executable: false, rent_epoch: 0 }).unwrap();
+        forge_token(svm, &user.pubkey(), &mint, &token_program_of(venue, mint), amount);
     }
+}
+
+/// The token program that owns `mint` in the venue's token list.
+pub fn token_program_of(venue: &dyn TradingVenue, mint: Pubkey) -> Pubkey {
+    if venue.get_token_info().iter().find(|t| t.pubkey == mint).expect("mint in venue").is_token_2022 { spl_token_2022::ID } else { spl_token::ID }
+}
+
+/// Forge `owner`'s ATA for `mint` under `program` holding `amount`; returns its address.
+pub fn forge_token(svm: &mut LiteSVM, owner: &Pubkey, mint: &Pubkey, program: &Pubkey, amount: u64) -> Pubkey {
+    let key = spl_associated_token_account::get_associated_token_address_with_program_id(owner, mint, program);
+    svm.set_account(key, Account { lamports: 10_000_000, data: token_account_bytes(mint, owner, amount), owner: *program, executable: false, rent_epoch: 0 }).unwrap();
+    key
 }
 
 fn valid(q: &QuoteResult) -> bool {
@@ -417,32 +424,25 @@ pub fn assert_quote_speed<V: TradingVenue>(venue: &V, seed: u64, max_avg_ns: f64
 // Routed execution: the venue's leg inside the route program under TitanPDA custody.
 // ---------------------------------------------------------------------------
 
-use crate::swap_route::{build_swap_leg, encode_swap_route_v3_data, titan_pda, ROUTER_PROGRAM_ID, ROUTE_WEIGHT_ALL, TITAN_PDA_DISC};
+use crate::swap_route::{ROUTE_WEIGHT_ALL, ROUTER_PROGRAM_ID, TITAN_PDA_DISC, build_swap_leg, encode_swap_route_v3_data, titan_pda};
 
 /// The route program from `TITAN_ROUTER_SO`, else the workspace's
-/// `cargo build-sbf --manifest-path titan/program/Cargo.toml` output; `None` until built.
+/// `cargo build-sbf --manifest-path titan/program/Cargo.toml` output. `None`, with a skip line
+/// printed, until it is built.
 pub fn router_program() -> Option<Vec<u8>> {
-    let path = std::env::var_os("TITAN_ROUTER_SO").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/reflect_titan_router.so"));
-    std::fs::read(path).ok()
+    let path = std::env::var_os("TITAN_ROUTER_SO")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/reflect_titan_router.so"));
+    let so = std::fs::read(path).ok();
+    if so.is_none() {
+        eprintln!("SKIP routed execution: run cargo build-sbf --manifest-path titan/program/Cargo.toml");
+    }
+    so
 }
 
 /// TitanPDA balances that must survive every route untouched.
 const RESERVED_IN: u64 = 17;
 const RESERVED_OUT: u64 = 29;
-
-fn token_program_of(venue: &dyn TradingVenue, mint: Pubkey) -> Pubkey {
-    if venue.get_token_info().iter().find(|t| t.pubkey == mint).expect("mint in venue").is_token_2022 {
-        spl_token_2022::ID
-    } else {
-        spl_token::ID
-    }
-}
-
-fn forge_token(svm: &mut LiteSVM, owner: &Pubkey, mint: &Pubkey, program: &Pubkey, amount: u64) -> Pubkey {
-    let key = spl_associated_token_account::get_associated_token_address_with_program_id(owner, mint, program);
-    svm.set_account(key, Account { lamports: 10_000_000, data: token_account_bytes(mint, owner, amount), owner: *program, executable: false, rent_epoch: 0 }).unwrap();
-    key
-}
 
 fn post_balance(info: &litesvm::types::SimulatedTransactionInfo, key: &Pubkey) -> u64 {
     info.post_accounts.iter().find(|(k, _)| k == key).map(|(_, a)| u64::from_le_bytes(a.data()[64..72].try_into().unwrap())).expect("account in simulation")

@@ -416,10 +416,7 @@ async fn quote_speed() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn titan_route() {
-    let Some(router) = reflect_titan_common::harness::router_program() else {
-        eprintln!("SKIP routed execution: run cargo build-sbf --manifest-path titan/program/Cargo.toml");
-        return;
-    };
+    let Some(router) = reflect_titan_common::harness::router_program() else { return };
     let (venue, snap, _, _) = setup().await;
     let mut svm = load_svm(&snap, &resolve_programs());
     reflect_titan_common::harness::assert_titan_route(&mut svm, &venue, &router);

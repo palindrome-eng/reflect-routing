@@ -25,7 +25,11 @@ fn venue_enum_matches_route_builder() {
         assert_eq!(program.try_to_vec().unwrap(), builder.to_borsh_bytes());
     }
     let spec = SwapSpecInputV2 { venue: Venue::ReflectRlp { min_out: 5 }, from: 0, to: 1, weight_nanos: swap_route::ROUTE_WEIGHT_ALL, n_accounts: 3 };
-    let expected = swap_route::encode_swap_route_v3_data(5_000, 2, &[swap_route::SwapSpecInputV2 { venue: RouteVenue::ReflectRlp { min_out: 5 }, from: 0, to: 1, weight_nanos: swap_route::ROUTE_WEIGHT_ALL, n_accounts: 3 }]);
+    let expected = swap_route::encode_swap_route_v3_data(
+        5_000,
+        2,
+        &[swap_route::SwapSpecInputV2 { venue: RouteVenue::ReflectRlp { min_out: 5 }, from: 0, to: 1, weight_nanos: swap_route::ROUTE_WEIGHT_ALL, n_accounts: 3 }],
+    );
     let mut data = vec![42u8];
     data.extend_from_slice(&5_000u64.to_le_bytes());
     data.push(2);

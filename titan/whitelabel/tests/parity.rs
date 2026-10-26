@@ -222,10 +222,7 @@ async fn prod_quote_speed() {
 /// Wrap and unwrap execute inside the route program under TitanPDA custody.
 #[tokio::test(flavor = "current_thread")]
 async fn prod_titan_route() {
-    let Some(router) = router_program() else {
-        eprintln!("SKIP routed execution: run cargo build-sbf --manifest-path titan/program/Cargo.toml");
-        return;
-    };
+    let Some(router) = router_program() else { return };
     let mut fx = boot("proxy_prod", PROXY_PROGRAM);
     let v = fx.venue().await;
     assert_titan_route(&mut fx.svm, &v, &router);
@@ -233,10 +230,7 @@ async fn prod_titan_route() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn staging_titan_route() {
-    let Some(router) = router_program() else {
-        eprintln!("SKIP routed execution: run cargo build-sbf --manifest-path titan/program/Cargo.toml");
-        return;
-    };
+    let Some(router) = router_program() else { return };
     let mut fx = boot("proxy_staging", PROXY_STAGING_PROGRAM);
     let v = fx.venue().await;
     assert_titan_route(&mut fx.svm, &v, &router);

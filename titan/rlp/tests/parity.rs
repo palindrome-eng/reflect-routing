@@ -186,10 +186,7 @@ async fn prod_quote_speed() {
 /// The deposit leg executes inside the route program under TitanPDA custody.
 #[tokio::test(flavor = "current_thread")]
 async fn prod_titan_route() {
-    let Some(router) = router_program() else {
-        eprintln!("SKIP routed execution: run cargo build-sbf --manifest-path titan/program/Cargo.toml");
-        return;
-    };
+    let Some(router) = router_program() else { return };
     let mut p = boot_prod();
     let v = venue(&p.svm, p.pool, vec![p.asset_mint]).await;
     assert_titan_route(&mut p.svm, &v, &router);
