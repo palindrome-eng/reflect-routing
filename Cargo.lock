@@ -2468,7 +2468,8 @@ dependencies = [
 
 [[package]]
 name = "reflect-sdk"
-version = "0.19.0"
+version = "0.20.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.20.0#dc2ce5f877974ba79d4940399ca8dd54711768ad"
 dependencies = [
  "anchor-lang",
  "reflect-sdk-core",
@@ -2482,7 +2483,8 @@ dependencies = [
 
 [[package]]
 name = "reflect-sdk-core"
-version = "0.19.0"
+version = "0.20.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.20.0#dc2ce5f877974ba79d4940399ca8dd54711768ad"
 dependencies = [
  "uint",
 ]
