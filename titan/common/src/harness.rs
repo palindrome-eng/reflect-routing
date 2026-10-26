@@ -511,7 +511,7 @@ pub fn assert_titan_route<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, router:
             assert_eq!(post_balance(&info, &user_in), 0, "{dir}: input not fully spent at {amount}");
             assert!(post_balance(&info, &titan_in) >= RESERVED_IN, "{dir}: TitanPDA input custody drained at {amount}");
             assert_eq!(post_balance(&info, &titan_out), RESERVED_OUT, "{dir}: TitanPDA output custody changed at {amount}");
-            eprintln!("titan route: {dir} ok at {amount} ({} CU)", info.meta.compute_units_consumed);
+            eprintln!("titan route: {dir} ok: {amount} in, {} out ({} CU)", q.expected_output, info.meta.compute_units_consumed);
         }
     }
 }
