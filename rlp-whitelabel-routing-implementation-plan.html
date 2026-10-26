@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RLP + Whitelabel Routing - Implementation Plan</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --border: #d8d8d8;
+    --code-bg: #f5f5f5; --accent: #0b5fff; --warn-bg: #fff4e0; --warn-border: #e0a030;
+    --ok-bg: #eaf7ea; --ok-border: #3a9a3a; --verify-bg: #eef3ff; --verify-border: #0b5fff;
+    --danger-bg: #fdeaea; --danger-border: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --fg: #e4e4e4; --muted: #9a9a9a; --border: #3a3d44;
+      --code-bg: #22252b; --accent: #6ea2ff; --warn-bg: #3a2f18; --warn-border: #c08a30;
+      --ok-bg: #1c2f1c; --ok-border: #4aa04a; --verify-bg: #1b2436; --verify-border: #6ea2ff;
+      --danger-bg: #361c1c; --danger-border: #c05050;
+    }
+  }
+  html { scroll-behavior: smooth; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         background: var(--bg); color: var(--fg); margin: 0; line-height: 1.55; }
+  main { max-width: 1080px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+  h1 { font-size: 1.7rem; border-bottom: 2px solid var(--border); padding-bottom: .5rem; }
+  h2 { font-size: 1.35rem; margin-top: 3rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+  h3 { font-size: 1.1rem; margin-top: 2rem; }
+  h4 { font-size: 1rem; margin-top: 1.5rem; }
+  code, pre { font-family: "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace; font-size: .86em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+        padding: .9rem 1rem; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .box { border-radius: 6px; padding: .8rem 1rem; margin: 1rem 0; border: 1px solid; }
+  .warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .ok { background: var(--ok-bg); border-color: var(--ok-border); }
+  .verify { background: var(--verify-bg); border-color: var(--verify-border); }
+  .danger { background: var(--danger-bg); border-color: var(--danger-border); }
+  .box > b:first-child { display: block; margin-bottom: .3rem; }
+  .muted { color: var(--muted); }
+  nav#toc { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+            padding: 1rem 1.4rem; margin: 1.5rem 0; }
+  nav#toc ol { margin: .3rem 0; padding-left: 1.3rem; }
+  nav#toc a { color: var(--accent); text-decoration: none; }
+  nav#toc a:hover { text-decoration: underline; }
+  .pill { display: inline-block; border: 1px solid var(--border); border-radius: 999px;
+          padding: .05rem .6rem; font-size: .78rem; background: var(--code-bg); margin-right: .3rem; }
+  .filetree { line-height: 1.35; }
+  li { margin: .2rem 0; }
+  .step { counter-increment: step; }
+  summary { cursor: pointer; font-weight: 600; }
+  details { border: 1px solid var(--border); border-radius: 6px; padding: .5rem .9rem; margin: 1rem 0; }
+  .overflow { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>RLP (insurance) + Whitelabel (proxy) routing adapters - implementation plan</h1>
+<p class="muted">
+  Repo: <code>~/projects/reflect/reflect-routing</code> &middot; SDK: <code>~/projects/reflect/reflect-core-sdk</code> (path dep) &middot; written 2026-07-07.<br>
+  Completes the product series <b>lending &rarr; bonds &rarr; rlp &rarr; whitelabel</b> already anticipated by the workspace
+  (<code>Cargo.toml</code> comment: "The program axis grows lending -&gt; bonds -&gt; rlp -&gt; whitelabel").
+</p>
+
+<div class="box ok">
+<b>What this plan produces</b>
+Two new venue cores in <code>core/</code> (<code>WhitelabelVenue</code>, <code>RlpVenue</code>, plus a small
+<code>WhitelabelSwapVenue</code>), four new adapter crates
+(<code>jupiter/whitelabel</code>, <code>jupiter/rlp</code>, <code>titan/whitelabel</code>, <code>titan/rlp</code>),
+one small SDK seam PR, and LiteSVM quote==execution parity suites for both products.
+Every phase ends with a runnable verification step.
+</div>
+
+<nav id="toc">
+<b>Contents</b>
+<ol>
+  <li><a href="#ground-truth">Ground truth (verified 2026-07-07)</a></li>
+  <li><a href="#products">The two products, in routing terms</a></li>
+  <li><a href="#decisions">Locked design decisions</a></li>
+  <li><a href="#sdk-api">SDK API reference (exact signatures)</a></li>
+  <li><a href="#phase0">Phase 0 - SDK seams (reflect-core-sdk)</a></li>
+  <li><a href="#phase-a">Phase A - <code>core/src/whitelabel.rs</code>: WhitelabelVenue</a></li>
+  <li><a href="#phase-b">Phase B - <code>core/src/rlp.rs</code>: RlpVenue</a></li>
+  <li><a href="#phase-c">Phase C - Titan shims</a></li>
+  <li><a href="#phase-d">Phase D - Jupiter shims</a></li>
+  <li><a href="#phase-e">Phase E - LiteSVM parity suites</a></li>
+  <li><a href="#phase-f">Phase F - WhitelabelSwapVenue (USDC &harr; USDC+), independently shippable</a></li>
+  <li><a href="#pitfalls">Pitfall table (read before coding)</a></li>
+  <li><a href="#dod">Definition of done + commit plan</a></li>
+  <li><a href="#appendix">Appendix - files to read, byte layouts, discriminators</a></li>
+</ol>
+</nav>
+
+<!-- ================================================================ -->
+<h2 id="ground-truth">1. Ground truth (verified 2026-07-07)</h2>
+
+<p>These facts were verified directly against the SDK source, protocol-core source, and live RPC. Do not re-derive them; do re-check the marked items if months have passed.</p>
+
+<table>
+<tr><th>Fact</th><th>Value</th><th>Consequence</th></tr>
+<tr>
+  <td>Proxy program (<code>ProxycrBkRh1S1241nBRkqrJTgTX1ginHDR8xTLjYSE</code>)</td>
+  <td><b>LIVE on mainnet</b>. ~100 <code>ProxyState</code> accounts exist (gPA, dataSize 115). All had <code>principal == 0</code> at check time.</td>
+  <td>Whitelabel parity can run against the deployed <code>.so</code> (dump + cache, never commit). Markets are enumerable by gPA.</td>
+</tr>
+<tr>
+  <td>Proxy backing mints in the wild</td>
+  <td>Most markets back with USDC+ (<code>usd63SVWcKqLeyNHpmVhZGYAqfE5RHE8jwqjRA2ida2</code>), but several use a different mint (<code>H5hM4fqRjygvCYXnp6dgFLgZ6o4uJ8Q9z7dAsTfapHmF</code>).</td>
+  <td>The venue MUST read <code>stablecoin_mint</code> from the ProxyState bytes (offsets 32..64). Never assume USDC+.</td>
+</tr>
+<tr>
+  <td>Proxy oracle account (<code>PRiceL8ZFBt4C3eKeVXbPmUJ4q5Nc7JN1CMaNfL9EkK</code>)</td>
+  <td>Exists on mainnet, 17 bytes, owned by <code>PRicevBH6BaeaE8qmrxrwGBZ5hSZ9vjBNue5Ygot1ML</code> (a separate price-updater program), NOT by the proxy program.</td>
+  <td>The oracle's <em>owner</em> can't be used as a program id anywhere. Program ids for rlp/proxy come from SDK consts (see decision D3).</td>
+</tr>
+<tr>
+  <td>RLP program (<code>rhLMe6vyM1wVLJaxrWUckVmPxSia58nSWZRDtYQow6D</code>)</td>
+  <td><b>NOT on mainnet</b>. Deployed on devnet only, and the devnet deployment is STALE: its <code>Settings</code> account is 107 bytes vs the SDK's expected 374 (<code>SettingsView::LEN</code>). No <code>LiquidityPool</code>, no <code>Asset</code> accounts exist on devnet.</td>
+  <td>RLP parity CANNOT use any deployed binary. Build the program from local source (<code>~/projects/reflect/reflect-program-library/rlp</code>, Anchor) and initialize state inside LiteSVM using the SDK's own admin instruction builders.</td>
+</tr>
+<tr>
+  <td>RLP <code>Settings</code> content</td>
+  <td>Verified in <code>reflect-protocol-core/src/rlp/layout.rs</code>: 8 disc + bump + <code>liquidity_pools: u8</code> @9 + <code>assets: u8</code> @10 + <code>frozen: u8</code> @11 + access-control map (362 B) + <code>killswitch: u8</code> @373. It stores asset COUNTS only, never asset mints.</td>
+  <td>The registered-asset set is NOT discoverable from any fetchable account. It must be injected at market-listing time (decision D5).</td>
+</tr>
+<tr>
+  <td><code>from_account_map</code> loaders (both products)</td>
+  <td>Verified in SDK source: both scan the provided <code>Vec&lt;(Pubkey, Vec&lt;u8&gt;)&gt;</code> for the keys they need and keep the rest.</td>
+  <td>Extra accounts (mint accounts for decimals, settings, vault balances) pass through harmlessly. Same pattern bonds already relies on.</td>
+</tr>
+<tr>
+  <td>SDK branch state</td>
+  <td><code>reflect-core-sdk</code> main is at <code>0d2bed0</code> (bond-routing-seams PR #4 merged). <code>proxy</code> and <code>rlp</code> modules fully exist with loaders, quote ctxs, and builders.</td>
+  <td>Only a tiny seam PR is needed (Phase 0). No new quote math.</td>
+</tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="products">2. The two products, in routing terms</h2>
+
+<h3>2.1 Whitelabel (proxy) - "lending-shaped", the easy one</h3>
+<p>
+Branded stablecoins over USDC+. Each integrator market is one <code>ProxyState</code> PDA
+(<code>["proxy", branded_mint]</code>, 115 bytes, no discriminator) holding a
+<code>(branded_mint, stablecoin_mint)</code> pair plus a fee and principal bookkeeping.
+Exactly two routable ops per market, dispatched by input mint alone, exactly like lending:
+</p>
+<ul>
+  <li><b>wrap</b>: stablecoin (USDC+) &rarr; branded tokens. ERC4626-style share mint with virtual offsets (1_000_000 each side).</li>
+  <li><b>unwrap</b>: branded tokens &rarr; stablecoin. Same math inverted.</li>
+</ul>
+<p>
+Both ops run a <b>yield crank first</b> (value the vault at the oracle price, split realized interest
+into principal vs integrator commission by <code>fee</code> bps), then price the user's share against the
+CRANKED principal. The SDK quotes mirror this exactly; the venue only delegates.
+Oracle staleness gate: <b>200 slots</b> (slot-based, unlike rlp's 120 seconds).
+There are NO caps, NO floors, NO pause flags on this product - the only quote-time failure that maps
+to an on-chain revert is a stale oracle.
+</p>
+<p>
+The protocol-level USDC &harr; USDC+ stable-swap (1 bps fee, program-owned inventory) is a SEPARATE
+facility, not part of any branded market. It becomes its own small venue in Phase F.
+<code>claim_fees</code> is an integrator-admin op, never routable - ignore it.
+</p>
+
+<h3>2.2 RLP (insurance) - "bonds-shaped", with three twists</h3>
+<p>
+One <code>LiquidityPool</code> (u8-indexed PDA) holding N registered assets (each an SPL mint bound to a
+Pyth or Switchboard oracle), issuing one LP token against the pool's total USD value. Routable edges:
+</p>
+<ul>
+  <li><b>restake</b>: asset &rarr; LP token. <code>lp_out = deposit_usd / pool_usd * lp_supply</code> (1:1 with USD on an empty pool).</li>
+  <li><b>swap</b>: asset &rarr; asset at the raw oracle cross-rate, no fee.</li>
+  <li><b>LP &rarr; asset is NOT routable</b>: withdrawal is a two-transaction cooldown (request_withdrawal, then withdraw after maturation, paying a pro-rata multi-asset basket). Out of scope for aggregator routing; quote must refuse it.</li>
+</ul>
+<p>The three twists vs bonds:</p>
+<ol>
+  <li><b>Asset discovery needs out-of-band input.</b> <code>Settings</code> stores only the asset COUNT. The registered mints come from a one-time gPA scan (<code>Asset</code> discriminator, dataSize 74) done by whoever lists the market, and are injected into the venue at construction (decision D5).</li>
+  <li><b>The SDK quote is deliberately thin.</b> It does NOT check the killswitch/frozen flags, does NOT check swap output liquidity, and does NOT respect asset access levels. The venue must add these three guards itself or quote==execution breaks (decision D6).</li>
+  <li><b>Single deployment.</b> All rlp PDAs derive against the const <code>ids::RLP_PROGRAM</code>. Same for proxy against <code>proxy::ids::PROGRAM</code>. Unlike strategy, nothing is program-id-relative (decision D3).</li>
+</ol>
+
+<!-- ================================================================ -->
+<h2 id="decisions">3. Locked design decisions</h2>
+
+<table>
+<tr><th>#</th><th>Decision</th><th>Rationale / rejected alternative</th></tr>
+<tr>
+  <td>D1</td>
+  <td>Venue cores stay <b>concrete, no trait</b>: <code>core/src/whitelabel.rs::WhitelabelVenue</code>, <code>core/src/rlp.rs::RlpVenue</code>, <code>core/src/whitelabel.rs::WhitelabelSwapVenue</code>, mirroring <code>LendingVenue</code>/<code>BondVenue</code>.</td>
+  <td>The generic <code>ReflectRoutingVenue</code> trait was already explored and REJECTED when the core crate was extracted. Do not resurrect it.</td>
+</tr>
+<tr>
+  <td>D2</td>
+  <td>Market account per product: whitelabel = the <code>ProxyState</code> PDA; rlp = the <code>LiquidityPool</code> PDA; whitelabel-swap = the pinned <code>ORACLE</code> account.</td>
+  <td>Both are gPA-enumerable, owned by the product program (except the swap oracle, see D3), and stable. The branded mint alone was rejected as the whitelabel market key because aggregators list an existing account they can fetch, and <code>ProxyState</code> is that account.</td>
+</tr>
+<tr>
+  <td>D3</td>
+  <td><b>Program ids are pinned</b>, not owner-derived: <code>reflect_sdk::proxy::ids::PROGRAM</code> and <code>reflect_sdk::rlp::ids::RLP_PROGRAM</code>. <code>from_market</code> takes only the market key. The venue verifies at <code>load()</code> time that the market account's owner equals the pinned id (whitelabel/rlp) and errors otherwise. LiteSVM tests deploy the real program at the REAL address.</td>
+  <td>Lending/bonds are program-id-relative because <code>strategy::pda</code> takes a program id; the rlp/proxy SDK modules derive every PDA against the const, so a mock program id is impossible anyway. The oracle-keyed swap venue skips the owner check (its market account is owned by the price program, verified fact).</td>
+</tr>
+<tr>
+  <td>D4</td>
+  <td>Venue quote error mapping (all three venues): <code>amount == 0</code> &rArr; <code>Ok(Some(zero))</code> before touching state; <code>CoreError::StaleOracle</code> &rArr; <code>Ok(None)</code> (no route); every other <code>CoreError</code> &rArr; <code>Err</code>.</td>
+  <td>rlp/proxy quotes never set <code>would_revert</code> (they surface <code>CoreError</code> instead - verified in <code>common/action.rs</code> docs). A stale oracle IS a predicted on-chain revert, so it must be "no route", not an adapter error; a malformed account or unknown mint is a hard error, matching the lending/bonds "no route &gt; bad route &gt; loud error" ladder.</td>
+</tr>
+<tr>
+  <td>D5</td>
+  <td>RLP asset set is <b>injected at construction</b>: <code>RlpVenue::from_market(market, asset_mints: Vec&lt;Pubkey&gt;)</code>. Oracle bindings are NOT injected; the venue derives <code>derive_asset(mint)</code> PDAs, fetches them through the normal account handshake, and decodes <code>OracleRef</code>s itself via <code>decode_asset_mint_and_oracle</code>. Jupiter carries the mint list in <code>KeyedAccount.params</code> (restoring the upstream field, see Phase D); Titan gets a dedicated constructor and its <code>FromAccount</code> impl returns a clear error.</td>
+  <td>Verified: no fetchable account lists the mints, and neither aggregator host can gPA. Injecting mints only (not oracles) keeps the injected config minimal and self-healing - oracle rebindings are picked up from chain. A compiled-in asset list was rejected (registry changes, devnet vs mainnet drift).</td>
+</tr>
+<tr>
+  <td>D6</td>
+  <td>RlpVenue adds three quote guards the SDK deliberately omits: (a) <code>Settings.frozen()</code> / killswitch per action (Restake=0, PublicSwap=3); (b) swap output clamped by the destination pool vault balance (<code>amount_out &gt; to_vault.amount</code> &rArr; no route); (c) assets with <code>access_level == Private (1)</code> are excluded from <code>mints()</code> entirely. All three return <code>Ok(None)</code>, never a fake number.</td>
+  <td>Each is an on-chain revert the SDK quote would happily quote through. The Titan <code>bounds()</code> binary search and the atom-exact parity bar both require quote totality AND honesty.</td>
+</tr>
+<tr>
+  <td>D7</td>
+  <td>Staleness-guard mismatch is accepted: rlp's registered-asset count is cross-checked against <code>Settings.assets()</code> at load; a mismatch (admin added/removed an asset since the listing scan) fails <code>load()</code> loudly.</td>
+  <td>A restake built with too few remaining-account triples reverts on-chain. Failing load is the only honest option; the lister re-scans and re-lists.</td>
+</tr>
+<tr>
+  <td>D8</td>
+  <td>Jupiter <code>Swap</code> tags: <code>ReflectProxyWrap</code>, <code>ReflectProxyUnwrap</code>, <code>ReflectRlpRestake</code>, <code>ReflectRlpSwap</code> (+ <code>ReflectProxySwap</code> in Phase F), appended as placeholders exactly like the bonds tags: NOT wire-stable, pending Jupiter's cross-org assignment.</td>
+  <td>Wrap and unwrap use the SAME 8-meta account order (verified in <code>proxy/ix.rs</code>) - direction lives only in the data discriminator, so a single tag with direction-from-account-order (the lending trick) is IMPOSSIBLE here. Two tags are mandatory.</td>
+</tr>
+<tr>
+  <td>D9</td>
+  <td><code>RouteQuote.fee</code> is always 0 for both products.</td>
+  <td>Proxy's crank fee is folded into pricing (never a scalar); rlp charges no routable-op fee. Same reasoning as bonds: a wrong-unit fee misleads the router more than zero does.</td>
+</tr>
+<tr>
+  <td>D10</td>
+  <td>Parity strategy: whitelabel = dump the LIVE mainnet <code>.so</code> (cache, gitignore, skip offline - the Kamino pattern) + hand-synthesized state; rlp = build the program from local Anchor source + initialize state in LiteSVM by driving the SDK's own <code>rlp::ix::admin</code> builders. No cross-repo Mollusk forge needed for either.</td>
+  <td>Unlike lending (Kamino obligations only a program can create), ALL state for both products is either hand-synthesizable (proxy: 115-byte state, 17-byte oracle, SPL accounts) or creatable through the program's own admin instructions (rlp). The devnet rlp binary is stale (verified) and must not be used.</td>
+</tr>
+<tr>
+  <td>D11</td>
+  <td>Withdrawal (LP &rarr; asset), <code>request_withdrawal</code>, <code>claim_fees</code>, and all crank/admin ops are OUT OF SCOPE for routing.</td>
+  <td>Two-transaction cooldown flows and admin ops are not aggregator edges. <code>quote_by_mints</code> already rejects LP-as-input with <code>CoreError::InvalidData</code>.</td>
+</tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="sdk-api">4. SDK API reference (exact signatures, verified against source)</h2>
+
+<p>Everything below exists TODAY on <code>reflect-core-sdk</code> main. Import path in this workspace: <code>reflect_sdk::proxy::*</code> / <code>reflect_sdk::rlp::*</code> (the package is aliased <code>reflect-sdk = {{ package = "reflect-core-sdk", path = ... }}</code>).</p>
+
+<h3>4.1 Shared (<code>reflect_sdk::common</code>, re-exported by both modules)</h3>
+<pre><code>pub struct Clock { pub slot: u64, pub unix: i64 }
+impl Clock { pub fn from_sysvar_bytes(data: &amp;[u8]) -&gt; Result&lt;Clock, CoreError&gt; } // slot @0, unix @32
+
+pub struct ActionQuote {
+    pub amount_out: u64,
+    pub unit: Unit,                       // ReceiptTokens | UsdE6 | OutTokens
+    pub fee: u64,                         // ALWAYS 0 for rlp + proxy
+    pub pps_1e12: u128,                   // ALWAYS 0 for rlp + proxy
+    pub would_revert: Option&lt;RevertCode&gt;, // ALWAYS None for rlp + proxy (errors are CoreError instead)
+}
+impl ActionQuote { pub fn min_out(&amp;self, slippage_bps: u16) -&gt; u64 } // floor, clamped
+
+pub struct BuiltInstruction {
+    pub instruction: Instruction,
+    pub lookup_tables: Vec&lt;Pubkey&gt;,   // ALWAYS empty for rlp + proxy
+    pub extra_signers: Vec&lt;Pubkey&gt;,   // ALWAYS empty for rlp + proxy (user is sole signer)
+}</code></pre>
+
+<h3>4.2 Proxy (whitelabel) - <code>reflect_sdk::proxy</code></h3>
+<pre><code>// ids.rs
+pub const PROGRAM: Pubkey        = pubkey!("ProxycrBkRh1S1241nBRkqrJTgTX1ginHDR8xTLjYSE");
+pub const ORACLE: Pubkey         = pubkey!("PRiceL8ZFBt4C3eKeVXbPmUJ4q5Nc7JN1CMaNfL9EkK");
+pub const USDC_MINT: Pubkey      = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+pub const USDC_PLUS_MINT: Pubkey = pubkey!("usd63SVWcKqLeyNHpmVhZGYAqfE5RHE8jwqjRA2ida2");
+
+// pda.rs
+pub fn derive_proxy_state(branded_mint: &amp;Pubkey) -&gt; (Pubkey, u8)  // ["proxy", branded_mint]
+pub fn derive_protocol_authority() -&gt; (Pubkey, u8)                // ["auth"] - swap inventory signer
+pub fn proxy_state_vault(proxy_state: &amp;Pubkey, stablecoin_mint: &amp;Pubkey) -&gt; Pubkey // SPL ATA
+pub fn token_ata(owner: &amp;Pubkey, mint: &amp;Pubkey) -&gt; Pubkey
+
+// quote_accounts.rs - discovery is DERIVATIONAL, no two-phase handshake in the SDK
+pub fn quote_account_keys(branded_mint: Pubkey) -&gt; ProxyQuoteAccountKeys              // assumes USDC+ backing
+pub fn quote_account_keys_from_state(branded_mint: Pubkey, proxy_state_bytes: &amp;[u8])
+    -&gt; Result&lt;ProxyQuoteAccountKeys, CoreError&gt;                                       // reads real stablecoin_mint
+pub struct ProxyQuoteAccountKeys {
+    pub proxy_state: Pubkey, pub oracle: Pubkey, pub vault: Pubkey,
+    pub branded_mint: Pubkey, pub stablecoin_mint: Pubkey,
+}
+impl ProxyQuoteAccountKeys { pub fn all_keys(&amp;self) -&gt; Vec&lt;Pubkey&gt; }  // 4 keys: state, oracle, vault, branded_mint
+
+// accounts.rs - the loader
+impl WhitelabelAccounts {
+    pub fn from_account_map&lt;I: IntoIterator&lt;Item = (Pubkey, Vec&lt;u8&gt;)&gt;&gt;(
+        branded_mint: Pubkey, accounts: I) -&gt; Result&lt;Self, CoreError&gt;
+    pub fn branded_mint(&amp;self) -&gt; Pubkey
+    pub fn stablecoin_mint(&amp;self) -&gt; Pubkey       // read from ProxyState bytes inside the map
+    pub fn whitelabel(&amp;self, user: Pubkey) -&gt; WhitelabelHandle&lt;'_&gt;
+    // input == stablecoin =&gt; wrap ; input == branded =&gt; unwrap ; else Err(InvalidData)
+    pub fn quote_by_mints(&amp;self, input_mint: Pubkey, amount: u64, clock: Clock)
+        -&gt; Result&lt;ActionQuote, CoreError&gt;
+}
+impl WhitelabelHandle&lt;'_&gt; {
+    pub fn wrap(&amp;self, amount: u64, slippage_bps: u16, clock: Clock)
+        -&gt; Result&lt;(ActionQuote, BuiltInstruction), CoreError&gt;
+    pub fn unwrap(&amp;self, amount: u64, slippage_bps: u16, clock: Clock)
+        -&gt; Result&lt;(ActionQuote, BuiltInstruction), CoreError&gt;
+}
+
+// quote.rs - stable-swap free functions (Phase F)
+pub fn quote_swap(oracle_bytes: &amp;[u8], amount: u64, direction: SwapDirection, clock: Clock)
+    -&gt; Result&lt;Quote, CoreError&gt;   // Quote { amount_out: u64 }
+pub enum SwapDirection { UsdcToUsdcPlus, UsdcPlusToUsdc }
+pub fn build_swap(inputs: &amp;SwapBuildInputs, args: SwapArgs) -&gt; BuiltInstruction  // infallible
+pub struct SwapBuildInputs { pub user: Pubkey, pub usdc_mint: Pubkey, pub usdc_plus_mint: Pubkey, pub oracle: Pubkey }
+pub struct SwapArgs { pub amount: u64, pub is_usdc: bool, pub min_out: u64 }
+
+// re-exported layouts (reflect_protocol_core::proxy)
+impl ProxyState {   // 115 bytes, NO discriminator, exact-length check
+    pub const LEN: usize = 115;
+    pub fn from_bytes(data: &amp;[u8]) -&gt; Result&lt;&amp;Self, CoreError&gt;
+    // branded_mint @0..32, stablecoin_mint @32..64, fee u16 @64, principal u64 @66,
+    // integrators_commission u64 @74, authority @82..114, bump @114
+}
+impl Oracle {       // 17 bytes: slot u64 @0, price u64 @8, precision u8 @16
+    pub fn is_stale(&amp;self, current_slot: u64) -&gt; bool  // current_slot - slot &gt; 200 (saturating)
+}</code></pre>
+
+<div class="box warn">
+<b>Proxy quirks that matter</b>
+<ul>
+  <li>Staleness is <b>slot</b>-based (200 slots). Only <code>clock.slot</code> matters, but populate both fields.</li>
+  <li><code>quote_wrap(0)</code>/<code>quote_unwrap(0)</code> return <code>Ok(0)</code> - no ZeroAmount error - but the venue still early-returns at 0 so the contract holds on a COLD venue.</li>
+  <li>Handle verbs reject <code>slippage_bps &gt; 10_000</code> with <code>InvalidData</code> (not clamped).</li>
+  <li>Everything is classic SPL Token. No Token-2022 anywhere in this product.</li>
+  <li><code>all_keys()</code> is 4 keys; <code>stablecoin_mint</code> is in the struct but NOT fetched by default. The venue appends it for decimals.</li>
+</ul>
+</div>
+
+<h3>4.3 RLP - <code>reflect_sdk::rlp</code></h3>
+<pre><code>// ids.rs
+pub const RLP_PROGRAM: Pubkey = pubkey!("rhLMe6vyM1wVLJaxrWUckVmPxSia58nSWZRDtYQow6D");
+
+// pda.rs (all against RLP_PROGRAM)
+pub fn derive_settings() -&gt; (Pubkey, u8)                    // ["settings"]
+pub fn derive_liquidity_pool(index: u8) -&gt; (Pubkey, u8)     // ["liquidity_pool", [index]]
+pub fn derive_asset(mint: &amp;Pubkey) -&gt; (Pubkey, u8)          // ["asset", mint]
+pub fn oracle_key(oracle: &amp;OracleRef) -&gt; Pubkey             // variant-blind key extraction
+pub fn token_ata(owner: &amp;Pubkey, mint: &amp;Pubkey) -&gt; Pubkey   // SPL ATA; pool vaults use this
+
+// discovery.rs
+pub fn decode_asset_mint_and_oracle(asset_bytes: &amp;[u8])
+    -&gt; Result&lt;(CorePubkey, OracleRef), CoreError&gt;           // decodes one Asset account
+pub enum OracleRef { Pyth(CorePubkey), Switchboard(CorePubkey) }  // CorePubkey = [u8; 32]
+
+// quote_accounts.rs
+pub fn pool_discovery_keys(liquidity_pool_index: u8, lp_token: Pubkey,
+    assets: &amp;[(Pubkey, OracleRef)]) -&gt; Vec&lt;Pubkey&gt;
+// = dedup([pool, lp_token] ++ per-asset [token_ata(pool, mint), oracle_key(oracle)])
+// NOTE: does NOT include asset mint accounts, Settings, or the Asset PDAs - the venue appends those.
+
+// accounts.rs - the loader
+impl PoolAccounts {
+    pub fn from_account_map&lt;I: IntoIterator&lt;Item = (Pubkey, Vec&lt;u8&gt;)&gt;&gt;(
+        pool_index: u8, assets: Vec&lt;(Pubkey, OracleRef)&gt;, accounts: I) -&gt; Result&lt;Self, CoreError&gt;
+    pub fn pool_index(&amp;self) -&gt; u8
+    pub fn lp_token(&amp;self) -&gt; Pubkey            // re-read from the pool bytes in the map
+    pub fn assets(&amp;self) -&gt; &amp;[(Pubkey, OracleRef)]
+    pub fn pool(&amp;self, user: Pubkey) -&gt; PoolHandle&lt;'_&gt;
+    // out == lp =&gt; restake ; in == lp =&gt; Err(InvalidData) (cooldown) ; else asset-asset swap
+    pub fn quote_by_mints(&amp;self, in_mint: Pubkey, out_mint: Pubkey, amount: u64, clock: Clock)
+        -&gt; Result&lt;ActionQuote, CoreError&gt;
+}
+impl PoolHandle&lt;'_&gt; {   // pub permissions: Option&lt;Pubkey&gt;, defaults None
+    pub fn restake(&amp;self, deposit_mint: Pubkey, amount: u64, slippage_bps: u16, clock: Clock)
+        -&gt; Result&lt;(ActionQuote, BuiltInstruction), CoreError&gt;
+    pub fn swap(&amp;self, from_mint: Pubkey, to_mint: Pubkey, amount_in: u64, slippage_bps: u16, clock: Clock)
+        -&gt; Result&lt;(ActionQuote, BuiltInstruction), CoreError&gt;
+}</code></pre>
+
+<div class="box warn">
+<b>RLP quirks that matter</b>
+<ul>
+  <li>Staleness is <b>unix-time</b>-based: reject if <code>publish_time + 120 &lt; clock.unix</code>. Only <code>clock.unix</code> matters for rlp quotes.</li>
+  <li>The SDK swap quote reads ONLY the two oracles - it does not check the destination vault balance (guard D6b).</li>
+  <li>The SDK checks neither <code>Settings.frozen()</code> nor the killswitch (guard D6a) nor asset access levels (guard D6c).</li>
+  <li>Restake pool valuation covers EVERY registered asset - the account set and the built instruction's remaining accounts are per-asset triples; a stale asset list reverts on-chain (guard D7).</li>
+  <li>Everything is classic SPL Token.</li>
+  <li>Pyth oracles must be <code>PriceUpdateV2</code> with verification level Full; Switchboard is the legacy aggregator layout.</li>
+</ul>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase0">5. Phase 0 - SDK seams (reflect-core-sdk, one small PR)</h2>
+
+<p>Branch <code>feat/rlp-proxy-routing-seams</code> off <code>main</code>. Two changes, both tiny:</p>
+
+<ol>
+  <li>
+    <b>Re-export the rlp layout views + Action.</b> The venue needs <code>SettingsView</code> (frozen/killswitch/asset-count guards), <code>LiquidityPoolView</code> (read <code>index</code> and <code>lp_token</code> off the market bytes), <code>AssetView</code> (access level), and <code>Action</code> (killswitch ordinals). Add to <code>src/rlp/mod.rs</code>:
+<pre><code>pub use reflect_protocol_core::rlp::{Action, AssetView, CooldownView, LiquidityPoolView, SettingsView};</code></pre>
+  </li>
+  <li>
+    <b>Make <code>MintInfo</code> constructible from outside the strategy loader</b> (the venues decode SPL mint accounts themselves). Check <code>src/strategy/...</code>: if <code>MintInfo</code>'s fields (<code>pubkey</code>, <code>decimals</code>, <code>token_program</code>) are already <code>pub</code>, nothing to do. If not, make them <code>pub</code> (or add <code>MintInfo::new</code>).
+  </li>
+</ol>
+
+<div class="box verify">
+<b>Verify (Phase 0)</b>
+<code>cargo test</code> + <code>cargo clippy --all-targets</code> in reflect-core-sdk stay green (114+ tests).
+Then, in reflect-routing, <code>cargo build -p reflect-routing-core</code> still compiles (path dep picks the branch up immediately).
+</div>
+
+<div class="box danger">
+<b>Executor verification task V1 (do this BEFORE Phase B code)</b>
+Read the rlp program source at <code>~/projects/reflect/reflect-program-library/rlp/programs/rlp/src/</code> and answer two questions the SDK cannot answer:
+<ol>
+  <li><b>Does the restake handler enforce a deposit cap?</b> (<code>update_deposit_cap</code> exists as an admin ix, so a cap lives somewhere.) If the handler checks one, mirror the check in <code>RlpVenue::quote</code> (no-route above the cap) and note where the cap is stored + which account carries it into the fetch set.</li>
+  <li><b>Does the swap handler require a permissions account for PUBLIC users?</b> The SDK's <code>SwapBuildInputs.admin: Option&lt;Pubkey&gt;</code> exists "for private asset / public-swap role gate". Determine whether <code>None</code> (encoded as the Anchor omitted-account placeholder) passes for a public-access asset pair when <code>PublicSwap</code> is not killswitched. If a permission account is ALWAYS required, the venue must derive <code>derive_permissions(user)</code> and pass it; document what the on-chain check accepts.</li>
+</ol>
+Record the answers as comments in <code>core/src/rlp.rs</code> where the corresponding guard lives.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase-a">6. Phase A - <code>core/src/whitelabel.rs</code>: WhitelabelVenue</h2>
+
+<p>New module in the existing <code>reflect-routing-core</code> crate. Mirror <code>bonds.rs</code> structurally: same doc style, same <code>Arc</code> caching, same zero-quote contract, same test shape. Register in <code>core/src/lib.rs</code>: <code>mod whitelabel; pub use whitelabel::WhitelabelVenue;</code> (Phase F later adds <code>WhitelabelSwapVenue</code>).</p>
+
+<h3>6.1 Shape</h3>
+<pre><code>use std::sync::Arc;
+use anyhow::{anyhow, bail, Context, Result};
+use solana_instruction::Instruction;
+use solana_pubkey::Pubkey;
+use reflect_sdk::common::Clock;
+use reflect_sdk::proxy::{self, ids, pda, ProxyState, WhitelabelAccounts};
+use reflect_sdk::strategy::MintInfo;
+use crate::RouteQuote;
+
+/// Which of the two branded-pair ops a mint pair maps to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhitelabelRoute { Wrap, Unwrap }
+
+#[derive(Clone)]
+pub struct WhitelabelVenue {
+    market: Pubkey,                        // the ProxyState PDA the aggregator listed
+    loaded: Option&lt;Arc&lt;WhitelabelAccounts&gt;&gt;,
+    mints: Option&lt;[MintInfo; 2]&gt;,          // [stablecoin (idx 0), branded (idx 1)]
+}</code></pre>
+
+<h3>6.2 Methods (exact contracts)</h3>
+<table>
+<tr><th>Method</th><th>Contract</th></tr>
+<tr><td><code>from_market(market: Pubkey) -&gt; Self</code></td>
+<td>Cold constructor. NO owner param (decision D3). <code>program_id()</code> returns <code>ids::PROGRAM</code>.</td></tr>
+<tr><td><code>seeds(&amp;self) -&gt; Vec&lt;Pubkey&gt;</code></td>
+<td><code>vec![self.market]</code>. ONE seed - the ProxyState itself carries both mints.</td></tr>
+<tr><td><code>discovery_keys(&amp;self, proxy_state: &amp;[u8]) -&gt; Result&lt;Vec&lt;Pubkey&gt;&gt;</code></td>
+<td>Decode <code>ProxyState::from_bytes</code> (surface decode errors, do not treat as cold). Read <code>branded_mint</code>/<code>stablecoin_mint</code>. No canonical-PDA guard: the SDK loader re-derives <code>["proxy", branded]</code> itself and <code>load()</code> fails on a mismatch (proxy/accounts.rs:64-65). Return <code>quote_account_keys_from_state(branded, proxy_state)?.all_keys()</code> PLUS the stablecoin mint account key appended (needed for decimals; extra keys pass through the loader harmlessly). 5 keys total.</td></tr>
+<tr><td><code>load(&amp;mut self, accounts: impl IntoIterator&lt;Item = (Pubkey, Pubkey, Vec&lt;u8&gt;)&gt;) -&gt; Result&lt;()&gt;</code></td>
+<td>Same item shape as the other venues (key, owner, data). <b>Guard:</b> find the market account in the iterator and check its owner is <code>ids::PROGRAM</code>, else error. Extract <code>branded_mint</code> from the market bytes, then build <code>WhitelabelAccounts::from_account_map(branded, accounts.map(|(k, _, d)| (k, d)))</code> and cache behind <code>Arc</code>. Decode both mint accounts (SPL Mint: decimals at byte 44) into <code>MintInfo { pubkey, decimals, token_program: TOKEN_PROGRAM }</code> - this product is SPL-only. Missing/short mint account bytes are an error (a proxy market always has both mints).</td></tr>
+<tr><td><code>mints(&amp;self) -&gt; Vec&lt;MintInfo&gt;</code></td>
+<td><code>[stablecoin (idx 0), branded (idx 1)]</code> - deposit-then-receipt order, mirroring lending's <code>[deposit, receipt]</code>. Empty until loaded.</td></tr>
+<tr><td><code>route(&amp;self, input_mint) -&gt; Result&lt;WhitelabelRoute&gt;</code></td>
+<td><code>input == stablecoin =&gt; Wrap</code>, <code>input == branded =&gt; Unwrap</code>, else error. Exposed for the Jupiter tag pick (bonds precedent).</td></tr>
+<tr><td><code>quote(&amp;self, input_mint, amount, clock) -&gt; Result&lt;Option&lt;RouteQuote&gt;&gt;</code></td>
+<td><code>amount == 0</code> &rArr; <code>Ok(Some(RouteQuote { amount_out: 0, fee: 0 }))</code> BEFORE touching <code>loaded</code>. Then delegate to <code>accounts.quote_by_mints(input_mint, amount, clock)</code> and apply the D4 ladder: <code>Err(CoreError::StaleOracle)</code> &rArr; <code>Ok(None)</code>; other <code>Err</code> &rArr; <code>Err</code>; <code>Ok(q)</code> &rArr; <code>Ok(Some(RouteQuote { amount_out: q.amount_out, fee: 0 }))</code> (D9).</td></tr>
+<tr><td><code>build(&amp;self, user, input_mint, amount, slippage_bps, clock) -&gt; Result&lt;Instruction&gt;</code></td>
+<td>Classify via <code>route()</code>, then <code>accounts.whitelabel(user).wrap(amount, slippage_bps, clock)</code> or <code>.unwrap(...)</code>, return <code>built.instruction</code>. Build with the REQUEST amount, not the quote (vendored-trait rule). No headroom param - unwrap output is exact, not an upper bound like lending redeem.</td></tr>
+</table>
+
+<div class="box warn">
+<b>CoreError matching</b>
+<code>CoreError</code> lives at <code>reflect_protocol_core::primitives::error::CoreError</code>. If it is not re-exported at
+<code>reflect_sdk::proxy</code>/<code>rlp</code> level, add it to the Phase 0 seam PR
+(<code>pub use reflect_protocol_core::primitives::error::CoreError;</code> in each module or in <code>common</code>).
+The D4 ladder needs to match on <code>CoreError::StaleOracle</code> by value, not by string.
+</div>
+
+<h3>6.3 Unit tests (in-module, mirror bonds.rs)</h3>
+<ul>
+  <li><code>cold_venue_has_no_mints_and_zero_quote_is_zero</code>: empty <code>mints()</code>; <code>quote(any, 0, clock)</code> is <code>Ok(Some(zero))</code>; <code>quote(any, 1, clock)</code> is <code>Err</code>; <code>route</code>/<code>build</code> on cold venue are <code>Err</code>.</li>
+  <li><code>seeds_is_the_market_account</code>: <code>seeds() == vec![market]</code>.</li>
+  <li><code>load_rejects_wrong_owner</code>: feed <code>load()</code> a market account whose owner is not the proxy program; expect <code>Err</code>. ProxyState byte fixture recipe: <code>let mut d = vec![0u8; 115]; d[0..32].copy_from_slice(branded.as_ref()); d[32..64].copy_from_slice(stable.as_ref());</code>.</li>
+  <li><code>discovery_keys_are_state_oracle_vault_and_both_mints</code>: for a CANONICAL pda/mint pairing, assert the 5 keys and their values (<code>derive_proxy_state</code>, <code>ids::ORACLE</code>, <code>proxy_state_vault</code>, branded, stablecoin).</li>
+</ul>
+
+<div class="box verify">
+<b>Verify (Phase A)</b> <code>cargo test -p reflect-routing-core</code> green; <code>cargo clippy -p reflect-routing-core --all-targets</code> clean.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase-b">7. Phase B - <code>core/src/rlp.rs</code>: RlpVenue</h2>
+
+<p>Register in <code>core/src/lib.rs</code>: <code>mod rlp; pub use rlp::{RlpRoute, RlpVenue};</code>.</p>
+
+<h3>7.1 Shape</h3>
+<pre><code>use reflect_sdk::rlp::{self, decode_asset_mint_and_oracle, ids, pda, pool_discovery_keys,
+    Action, AssetView, LiquidityPoolView, OracleRef, PoolAccounts, SettingsView};
+
+/// Which of the two routable rlp ops a mint pair maps to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RlpRoute { Restake, Swap }
+
+#[derive(Clone)]
+pub struct RlpVenue {
+    market: Pubkey,                     // the LiquidityPool PDA the aggregator listed
+    asset_mints: Vec&lt;Pubkey&gt;,           // injected at listing time (decision D5), order = listing order
+    // resolved during load:
+    loaded: Option&lt;Arc&lt;PoolAccounts&gt;&gt;,
+    restake_frozen: bool,               // killswitch bit 0, parsed ONCE at load
+    swap_frozen: bool,                  // Settings.frozen() OR killswitch bit 3 (PublicSwap)
+    vaults: Vec&lt;(Pubkey, u64)&gt;,         // (asset mint, pool vault balance) - swap liquidity guard
+    mints: Vec&lt;MintInfo&gt;,               // [lp (idx 0), public asset_0..n] - mints[1..] IS the public set (guard D6c)
+}</code></pre>
+
+<h3>7.2 The three-round discovery handshake</h3>
+<p>
+The venue cannot produce the full fetch set in one derivation (oracle keys live inside the Asset PDA bytes),
+so <code>discovery_keys</code> is TWO-STAGE on top of the seeds. Both aggregator shims already loop
+update cycles until the venue warms (Jupiter re-calls <code>get_accounts_to_update</code>/<code>update</code>;
+Titan's <code>update_state</code> can do multiple <code>cache.get_accounts</code> rounds internally), so this costs
+one extra cycle vs bonds, nothing structural.
+</p>
+<table>
+<tr><th>Round</th><th>Keys</th><th>Derivable from</th></tr>
+<tr><td>1 - <code>seeds()</code></td>
+<td><code>[market, derive_settings().0]</code> ++ <code>derive_asset(mint).0</code> for every injected mint ++ the mint accounts themselves</td>
+<td>The injected mint list alone. Asset PDAs and mint accounts (decimals) need no fetched bytes.</td></tr>
+<tr><td>2 - <code>discovery_keys(pool_bytes, settings_bytes, asset_bytes: &amp;[&amp;[u8]])</code></td>
+<td>Everything above PLUS <code>[lp_token mint]</code> ++ per-asset <code>[token_ata(pool, mint), oracle_key(oracle)]</code> (i.e. <code>pool_discovery_keys(index, lp_token, &amp;assets)</code> output, deduped with round 1)</td>
+<td><code>index</code> + <code>lp_token</code> from <code>LiquidityPoolView</code>; per-asset <code>OracleRef</code> from <code>decode_asset_mint_and_oracle</code> on each Asset PDA's bytes.</td></tr>
+<tr><td>3 - <code>load(all fetched accounts)</code></td>
+<td colspan="2">Build <code>PoolAccounts::from_account_map(index, assets, ...)</code>, run the load-time guards, cache everything.</td></tr>
+</table>
+
+<h3>7.3 Methods (exact contracts)</h3>
+<table>
+<tr><th>Method</th><th>Contract</th></tr>
+<tr><td><code>from_market(market: Pubkey, asset_mints: Vec&lt;Pubkey&gt;) -&gt; Self</code></td>
+<td>Cold constructor. The mint list comes from the lister's one-time gPA scan (see 7.5). <code>program_id()</code> returns <code>ids::RLP_PROGRAM</code>.</td></tr>
+<tr><td><code>seeds(&amp;self) -&gt; Vec&lt;Pubkey&gt;</code></td>
+<td>Round-1 set above, in a FIXED order the shim relies on: <code>[market, settings, asset_pda_0.., mint_0..]</code>.</td></tr>
+<tr><td><code>discovery_keys(&amp;self, pool: &amp;[u8], settings: &amp;[u8], assets: &amp;[&amp;[u8]]) -&gt; Result&lt;Vec&lt;Pubkey&gt;&gt;</code></td>
+<td>Decode errors SURFACE (not "still cold"). Guards, in order:
+(1) <code>LiquidityPoolView::from_bytes(pool)?</code>, read <code>index</code>, check <code>derive_liquidity_pool(index).0 == self.market</code> else bail;
+(2) <code>SettingsView::from_bytes(settings)?</code>, check <code>settings.assets()? as usize == self.asset_mints.len()</code> else bail with the D7 message ("registered asset count changed; re-scan and re-list this market");
+(3) decode each Asset account, check the decoded mint equals the injected mint at that position.
+Return the round-2 set (deduped union of rounds 1 and 2).</td></tr>
+<tr><td><code>load(&amp;mut self, accounts) -&gt; Result&lt;()&gt;</code></td>
+<td>Ownership guard (market owner must be <code>ids::RLP_PROGRAM</code> - D3); the round-2 guards already ran in <code>discovery_keys</code> (both shims call it before load), so load does NOT re-run them. Parse <code>SettingsView</code> ONCE into the two frozen flags. Split assets into public/private via <code>AssetView</code> access level; build <code>PoolAccounts::from_account_map(index, all_assets, ...)</code> with the FULL asset set (the SDK needs every asset for pool valuation) but expose only PUBLIC assets in <code>mints()</code> (guard D6c). Retain per-asset vault balances (SPL TokenAccount amount at byte 64). Decode <code>MintInfo</code> for lp + public assets via the shared <code>spl_mint_info</code> helper in <code>core/src/lib.rs</code> (SPL-only, decimals at mint byte 44). LP mint decimals come from the lp_token mint account, which IS in the round-2 set.</td></tr>
+<tr><td><code>mints(&amp;self)</code></td>
+<td><code>[lp (idx 0), public asset_0..n]</code> - receipt-first, mirroring bonds' <code>[receipt, assets...]</code>. Empty until loaded.</td></tr>
+<tr><td><code>route(&amp;self, input_mint, output_mint) -&gt; Result&lt;RlpRoute&gt;</code></td>
+<td><code>output == lp &amp;&amp; input is a public asset =&gt; Restake</code>; <code>both public assets &amp;&amp; input != output =&gt; Swap</code>; <code>input == lp =&gt; Err("withdrawal is a two-transaction cooldown; not routable")</code>; anything else <code>Err</code>.</td></tr>
+<tr><td><code>quote(&amp;self, input_mint, output_mint, amount, clock) -&gt; Result&lt;Option&lt;RouteQuote&gt;&gt;</code></td>
+<td>Ladder, in order:
+(1) <code>amount == 0</code> &rArr; <code>Ok(Some(zero))</code> before anything else;
+(2) not loaded &rArr; <code>Err</code>;
+(3) <code>route()?</code> - LP-input and unknown mints are Err here, once, instead of deep in the SDK;
+(4) killswitch: <code>Restake</code> frozen (ordinal 0) for restake, <code>frozen()</code> OR <code>PublicSwap</code> frozen (ordinal 3) for swap &rArr; <code>Ok(None)</code>;
+(5) delegate <code>accounts.quote_by_mints(input, output, amount, clock)</code>; <code>Err(StaleOracle)</code> &rArr; <code>Ok(None)</code>, other <code>Err</code> &rArr; <code>Err</code>;
+(6) swap only: <code>q.amount_out &gt; to_vault_balance</code> &rArr; <code>Ok(None)</code> (guard D6b; the program pays from inventory it must actually hold);
+(7) <code>Ok(Some(RouteQuote { amount_out, fee: 0 }))</code>.
+Plus whatever V1 found (deposit cap on restake).</td></tr>
+<tr><td><code>build(&amp;self, user, input_mint, output_mint, amount, slippage_bps, clock) -&gt; Result&lt;Instruction&gt;</code></td>
+<td><code>route()?</code> then <code>accounts.pool(user).restake(input_mint, amount, slippage_bps, clock)</code> or <code>.swap(input_mint, output_mint, amount, slippage_bps, clock)</code>; return <code>built.instruction</code>. <code>PoolHandle.permissions</code> stays <code>None</code> unless V1 says otherwise.</td></tr>
+</table>
+
+<h3>7.4 Unit tests (in-module)</h3>
+<ul>
+  <li><code>cold_venue_contract</code>: empty mints; zero-quote <code>Ok(Some(0))</code>; real-amount quote <code>Err</code>; route/build <code>Err</code>.</li>
+  <li><code>seeds_order_is_pool_settings_assets_mints</code>: for 2 injected mints assert 6 keys in the documented order with the exact PDA derivations.</li>
+  <li><code>discovery_rejects_asset_count_mismatch</code>: hand-build Settings bytes (374 B, disc <code>[223,179,163,190,177,224,67,173]</code>, assets byte @10 = 3) against 2 injected mints; expect <code>Err</code>.</li>
+  <li><code>discovery_rejects_wrong_pool_pda</code>: LiquidityPool bytes (58 B, disc <code>[66,38,17,64,188,80,68,129]</code>, index @9) whose derived PDA != market.</li>
+  <li><code>lp_input_is_not_a_route</code>: on a loaded fixture (hand-built byte fixtures - copy the recipes from the SDK's <code>rlp/accounts.rs</code> and <code>rlp/quote.rs</code> unit tests, which document every buffer layout including the 101-byte Pyth PriceUpdateV2), <code>route(lp, asset)</code> is <code>Err</code>.</li>
+  <li><code>killswitch_gates_quote</code>: same fixture, set killswitch bit 0 (Restake) / bit 3 (PublicSwap) / frozen byte, assert <code>Ok(None)</code> per affected route and <code>Ok(Some)</code> for the unaffected one.</li>
+  <li><code>swap_clamped_by_destination_vault</code>: fixture where the cross-rate output exceeds the destination vault balance &rArr; <code>Ok(None)</code>; and a small amount &rArr; <code>Ok(Some)</code>.</li>
+  <li><code>private_asset_excluded</code>: fixture with one asset's access byte (@73) = 1; <code>mints()</code> omits it; <code>route(private, lp)</code> is <code>Err</code>.</li>
+</ul>
+
+<h3>7.5 The lister-side scan (documented, not built)</h3>
+<p>Document in the crate docs (rustdoc on <code>RlpVenue</code>) how the asset-mint list is produced - one RPC call, run at listing time and whenever the registry changes:</p>
+<pre><code>// getProgramAccounts(RLP_PROGRAM, dataSize = 74, memcmp @0 = [234,180,241,252,139,224,160,8])
+// asset mint = bytes 8..40 of each account. Order does not matter (the program
+// matches remaining-account triples by asset PDA), but keep it stable for cache reuse.</code></pre>
+
+<div class="box verify">
+<b>Verify (Phase B)</b> <code>cargo test -p reflect-routing-core</code> green (all Phase A + B tests); clippy clean; <code>cargo build --workspace</code> still green.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase-c">8. Phase C - Titan shims (<code>titan/whitelabel</code>, <code>titan/rlp</code>)</h2>
+
+<p>
+Each crate is a copy of the <code>titan/bonds</code> skeleton. Per-product code lives ONLY in <code>src/reflect.rs</code>;
+the vendored <code>trading_venue/</code> + <code>account_caching/</code> modules are copied VERBATIM from
+<code>titan/bonds</code> except <code>trading_venue/protocol.rs</code>, where the single added <code>PoolProtocol</code>
+variant is renamed (<code>ReflectWhitelabel</code> / <code>ReflectRlp</code>) with a one-line doc, plus the matching
+<code>From&lt;PoolProtocol&gt; for String</code> arm. Copy the five identical vendored files byte-for-byte - do not "improve" them.
+</p>
+
+<h3>8.1 Cargo.toml</h3>
+<p>Copy <code>titan/bonds/Cargo.toml</code>; change <code>name</code> to <code>reflect-titan-whitelabel</code> / <code>reflect-titan-rlp</code> and the description ("Reflect whitelabel branded pair as a Titan TradingVenue, built on reflect-sdk." / "Reflect insurance liquidity pool as a Titan TradingVenue, built on reflect-sdk."). Keep the dependency set identical (async-trait, thiserror, log, solana 2.2 crates, spl-token, spl-token-2022, spl-associated-token-account). Dev-deps come in Phase E.</p>
+
+<h3>8.2 <code>reflect.rs</code> - whitelabel (2-token venue, lending-like)</h3>
+<pre><code>const SLIPPAGE_BPS: u16 = 50; // ponytail: 0.5% floor; tune once Titan's slippage model is pinned.
+const CLOCK_SYSVAR: Pubkey = solana_program::sysvar::clock::ID;
+
+pub struct ReflectWhitelabelVenue {
+    venue: WhitelabelVenue,
+    clock: Clock,
+    keys: Vec&lt;Pubkey&gt;,        // seeds before load, full discovery set after
+    tokens: Vec&lt;TokenInfo&gt;,   // [stablecoin (idx 0), branded (idx 1)]
+    loaded: bool,
+}</code></pre>
+<ul>
+  <li><code>FromAccount::from_account(pubkey, _account)</code>: cold-construct with <code>WhitelabelVenue::from_market(*pubkey)</code>. No shim-level owner check (lending/bonds have none either); <code>WhitelabelVenue::load</code> enforces ownership (D3).</li>
+  <li><code>update_state</code>: identical two-phase pattern to lending - fetch <code>[market, CLOCK_SYSVAR]</code>, parse clock via <code>Clock::from_sysvar_bytes</code>, <code>discovery_keys(&amp;market.data)?</code>, fetch, <code>venue.load(...)</code>, then <code>tokens = venue.mints().map(to_token_info)</code>, reject empty with "proxy market has no mint pair". Set <code>keys</code> to the discovery set, <code>loaded = true</code>.</li>
+  <li><code>quote</code>: <code>NotInitialized</code> guard when cold; then the exact lending body - <code>Ok(Some(q)) =&gt; q.amount_out</code>, anything else 0; <code>not_enough_liquidity = expected_output == 0 &amp;&amp; amount &gt; 0</code>. The D4 mapping in the core venue makes a stale oracle read as no-liquidity here, which is what <code>bounds()</code> needs.</li>
+  <li><code>generate_swap_instruction</code>: <code>venue.build(user, request.input_mint, request.amount, SLIPPAGE_BPS, self.clock)</code>. No headroom argument exists for this venue (unwrap output is exact).</li>
+  <li><code>program_dependencies()</code>: <code>vec![TOKEN_PROGRAM]</code>. <code>protocol()</code>: <code>PoolProtocol::ReflectWhitelabel</code>. <code>get_lookup_table_keys</code>: <code>Ok(vec![])</code> ("no whitelabel lookup table published yet").</li>
+  <li><code>bounds()</code>: default impl, untouched.</li>
+</ul>
+
+<h3>8.3 <code>reflect.rs</code> - rlp (N+1-token venue, bonds-like, plus the injected mint list)</h3>
+<pre><code>pub struct ReflectRlpVenue { venue: RlpVenue, clock: Clock, keys: Vec&lt;Pubkey&gt;, tokens: Vec&lt;TokenInfo&gt;, loaded: bool }
+
+impl ReflectRlpVenue {
+    /// The integration entry point: Titan's registry supplies the market key
+    /// AND the registered asset mints (from the documented gPA scan).
+    pub fn new(pool: Pubkey, asset_mints: Vec&lt;Pubkey&gt;)
+        -&gt; Self { /* cold construct; ownership enforced at RlpVenue::load */ }
+}
+
+impl FromAccount for ReflectRlpVenue {
+    fn from_account(_: &amp;Pubkey, _: &amp;Account) -&gt; Result&lt;Self, TradingVenueError&gt; {
+        // The registered-asset set is not discoverable on-chain (Settings stores
+        // only a count); the lister must inject it.
+        Err(TradingVenueError::AmmMethodError(
+            "rlp venue needs the registered asset-mint set; construct via ReflectRlpVenue::new".into()))
+    }
+}</code></pre>
+<ul>
+  <li><code>update_state</code>: THREE rounds against the cache, all inside one call (the cache is just an account store): (1) fetch <code>venue.seeds()</code> + <code>CLOCK_SYSVAR</code>, every account required present (<code>NoAccountFound</code> per missing key); (2) <code>venue.discovery_keys(pool, settings, asset_bytes)?</code>, fetch that set; (3) <code>venue.load(...)</code>. Then <code>tokens = venue.mints().map(to_token_info)</code>, reject fewer than 2 tokens ("no public routable assets"). Clock parse identical to bonds.</li>
+  <li><code>quote</code>: bonds body verbatim (passes both mints): <code>venue.quote(in, out, amount, clock)</code>, <code>Ok(Some(q))</code> else 0. LP-as-input comes back <code>Err</code> from the core venue and maps to 0 / <code>not_enough_liquidity</code> here - totality preserved for <code>bounds()</code>.</li>
+  <li><code>generate_swap_instruction</code>: <code>venue.build(user, in, out, amount, SLIPPAGE_BPS, clock)</code>.</li>
+  <li><code>program_dependencies()</code>: <code>vec![TOKEN_PROGRAM]</code> (rlp is SPL-only, verified). <code>protocol()</code>: <code>PoolProtocol::ReflectRlp</code>. Lookup tables: none.</li>
+  <li>Doc-comment on the struct: <code>bounds(lp_idx, asset_idx)</code> for the LP-input direction finds NO valid quote and returns <code>Err(NoQuotableValue)</code> - expected and correct; Titan skips unquotable pairs.</li>
+</ul>
+
+<h3>8.4 Unit tests</h3>
+<ul>
+  <li>Both crates: the <code>to_token_info</code> decimal-cast test (copy from bonds) and the cold-venue test (<code>!initialized()</code>, empty tokens, <code>quote</code> &rarr; <code>NotInitialized</code>).</li>
+  <li>whitelabel: <code>get_required_pubkeys_for_update()</code> len 1 pre-load (the single seed).</li>
+  <li>rlp: <code>FromAccount::from_account</code> returns the instructive error; <code>new()</code> with a wrong-owner account errors; seeds len for 2 injected mints = 6.</li>
+</ul>
+
+<div class="box verify">
+<b>Verify (Phase C)</b> <code>cargo test -p reflect-titan-whitelabel -p reflect-titan-rlp</code> green; clippy clean; the workspace glob picked both dirs up (run <code>cargo build --workspace</code>).
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase-d">9. Phase D - Jupiter shims (<code>jupiter/whitelabel</code>, <code>jupiter/rlp</code>)</h2>
+
+<p>Each crate is a copy of the <code>jupiter/bonds</code> skeleton (three files + tests). Same vendored <code>Amm</code> trait, <code>ClockRef</code>, and <code>Swap</code> enum; do not add a jupiter-amm-interface dependency (the solana 2.2 vendoring decision stands).</p>
+
+<h3>9.1 Cargo.toml</h3>
+<p>Copy <code>jupiter/bonds/Cargo.toml</code>; rename to <code>reflect-jupiter-whitelabel</code> / <code>reflect-jupiter-rlp</code>. The rlp crate ADDS <code>serde_json = "1"</code> to <code>[dependencies]</code> (KeyedAccount params, next section).</p>
+
+<h3>9.2 The rlp asset-list injection: restore <code>KeyedAccount.params</code></h3>
+<p>
+Upstream <code>jupiter-amm-interface</code> v0.6.1's <code>KeyedAccount</code> carries
+<code>pub params: Option&lt;serde_json::Value&gt;</code> - per-market config Jupiter passes at listing time
+(used by other AMMs for exactly this problem). The existing vendored copies dropped the field because
+lending/bonds never needed it. In <code>jupiter/rlp</code>'s vendored block, restore it faithfully:
+</p>
+<pre><code>#[derive(Clone)]
+pub struct KeyedAccount {
+    pub key: Pubkey,
+    pub account: Account,
+    /// Additional data an Amm requires; Jupiter supplies it from the market listing.
+    pub params: Option&lt;serde_json::Value&gt;,
+}</code></pre>
+<p>
+<code>from_keyed_account</code> parses <code>{"asset_mints": ["&lt;base58&gt;", ...]}</code> from <code>params</code>;
+a missing/malformed list is a HARD error with an instructive message (same philosophy as the Titan
+<code>FromAccount</code> error). Also verify <code>ka.account.owner == ids::RLP_PROGRAM</code> (D3).
+Document the params schema in the crate rustdoc - it is part of the Jupiter handoff package.
+<span class="muted">(jupiter/whitelabel does NOT need params; keep its vendored KeyedAccount identical to bonds'.)</span>
+</p>
+
+<h3>9.3 Amm impls</h3>
+<table>
+<tr><th></th><th>whitelabel (<code>ReflectWhitelabelAmm</code>)</th><th>rlp (<code>ReflectRlpAmm</code>)</th></tr>
+<tr><td>Seed cache</td><td><code>market_data: Option&lt;Vec&lt;u8&gt;&gt;</code> (1 seed)</td><td><code>seed_data: Vec&lt;Option&lt;Vec&lt;u8&gt;&gt;&gt;</code> sized <code>venue.seeds().len()</code> (2 + 2N seeds; sized at runtime, unlike bonds' fixed array)</td></tr>
+<tr><td><code>from_keyed_account</code></td><td>venue = <code>WhitelabelVenue::from_market(ka.key)</code>; cache <code>ka.account.data</code> as the seed. No shim-level owner check - <code>venue.load</code> enforces it</td><td>parse <code>params.asset_mints</code>; venue = <code>RlpVenue::from_market(ka.key, mints)</code>; cache <code>ka.account.data</code> as seed 0. No shim-level owner check - <code>venue.load</code> enforces it</td></tr>
+<tr><td><code>get_accounts_to_update</code></td><td>cold &rArr; seeds; warm-seed &rArr; <code>discovery_keys(market_bytes)</code>, fall back to seeds on derive failure</td><td>same, gated on ALL seed slots being <code>Some</code>; pass <code>(pool, settings, &amp;asset_byte_slices)</code></td></tr>
+<tr><td><code>update</code></td><td colspan="2">bonds pattern verbatim: re-cache each seed from the map; any seed missing &rArr; <code>Ok(())</code> (still cold); present-but-undecodable &rArr; hard error; then <code>discovery_keys</code> + <code>venue.load(filter_map over the map)</code>. Two host update cycles warm the whitelabel venue, three warm rlp (document in the module doc).</td></tr>
+<tr><td><code>get_reserve_mints</code></td><td><code>[stablecoin, branded]</code></td><td><code>[lp, public assets...]</code>; LP-input pairs quote as <code>Err</code> (one-way edge, document it)</td></tr>
+<tr><td><code>quote</code></td><td><code>venue.quote(input_mint, amount, clock)</code>; <code>None</code> &rArr; <code>bail!("reflect would revert: no route &gt; bad route")</code>; <code>fee_amount: 0, fee_mint: input_mint</code> (D9)</td><td><code>venue.quote(input, output, amount, clock)</code>; same None-&rArr;bail; <code>fee_amount: 0</code></td></tr>
+<tr><td><code>get_swap_and_account_metas</code></td><td><code>venue.route(sp.source_mint)?</code> &rArr; <code>Swap::ReflectProxyWrap</code> / <code>ReflectProxyUnwrap</code>; build with slippage 0 ("Jupiter's program writes the instruction data; the serialized data is discarded"); <code>account_metas: ix.accounts</code></td><td><code>venue.route(src, dst)?</code> &rArr; <code>Swap::ReflectRlpRestake</code> / <code>ReflectRlpSwap</code>; build with slippage 0; metas passed through untouched</td></tr>
+<tr><td>Flags</td><td colspan="2"><code>supports_exact_out = false</code>, <code>requires_update_for_reserve_mints = true</code>, <code>has_dynamic_accounts = true</code>, <code>label = "Reflect"</code>, <code>program_id() = venue.program_id()</code>, <code>key() = venue.market()</code></td></tr>
+</table>
+
+<h3>9.4 swap.rs</h3>
+<p>Copy <code>jupiter/bonds/src/swap.rs</code> verbatim (module doc + ponytail note included) and append, after the bonds placeholders, with the same PENDING comment block:</p>
+<pre><code>    ReflectProxyWrap,
+    ReflectProxyUnwrap,
+    ReflectRlpRestake,
+    ReflectRlpSwap,</code></pre>
+<div class="box warn">
+<b>Do not skimp on the direction tags.</b> Wrap and unwrap share ONE account-meta order
+(user, stablecoin_user_ata, branded_user_ata, proxy_state, vault, branded_mint, oracle, token_program),
+so Jupiter's program can only learn the direction from the tag. This is unlike lending, where account
+order encodes direction. The golden-metas parity test (Phase E) must assert the tag&harr;route mapping
+AND print both orders for the handoff.
+</div>
+
+<h3>9.5 Unit tests</h3>
+<ul>
+  <li>Both: <code>cold_amm_has_no_reserve_mints_and_quote_errs</code> (bonds copy: random owner, <code>data: vec![0u8; 8]</code> - proving decode errors do not panic).</li>
+  <li>whitelabel: <code>cold_accounts_to_update_is_the_single_seed</code>.</li>
+  <li>rlp: <code>from_keyed_account_requires_params</code> (missing params &rArr; Err with the instructive message); <code>params_parse_roundtrip</code> (2 mints in, seeds len 6 out). Wrong-owner rejection is covered at the core venue (<code>load_rejects_wrong_owner</code>), not per shim.</li>
+</ul>
+
+<div class="box verify">
+<b>Verify (Phase D)</b> <code>cargo test -p reflect-jupiter-whitelabel -p reflect-jupiter-rlp</code> green; clippy clean; <code>cargo fmt --check</code> across the workspace.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase-e">10. Phase E - LiteSVM parity suites (quote == execution, atom-exact)</h2>
+
+<p>The validation bar is unchanged: off-chain quote equals the on-chain execution delta, atom-exact, over an amount sweep, in both directions, in a simulator against a reproducible snapshot. Titan crates carry the LiteSVM suites; Jupiter crates get hermetic offline suites that prove quote-equality against an independently wired core venue plus the golden metas (the bonds transitivity argument: Jupiter builds the same SDK instruction Titan executes).</p>
+
+<h3>10.1 <code>titan/whitelabel/tests/parity.rs</code> - synthesized state + live mainnet .so</h3>
+<ol>
+  <li><b>Program binary</b>: <code>tests/fixtures/programs/proxy_program.so</code>, resolved like the Kamino programs in <code>titan/lending/tests/parity.rs</code> (copy that resolver): local cache &rarr; RPC dump of <code>ProxycrBkRh1S1241nBRkqrJTgTX1ginHDR8xTLjYSE</code> via <code>SOLANA_RPC_URL</code> (ProgramData ELF at offset 45, run the blocking client on a plain <code>std::thread</code>). Gitignored; tests <b>skip with an eprintln when missing</b> so offline <code>cargo test</code> stays green. Dev-deps: copy <code>titan/lending</code>'s block (litesvm =0.6.1, solana-sdk 2.2, solana-client, serde_json, base64, bincode, tokio, spl-token, spl-associated-token-account).</li>
+  <li><b>State synthesis</b> (no forge, no fixture JSON - everything is hand-buildable; put the builders in the test file):
+    <ul>
+      <li>branded mint: 82-byte SPL Mint, supply @36, decimals 6 @44, mint authority = the proxy_state PDA (LiteSVM does not validate authorities on <code>set_account</code>, but set it correctly anyway - the program's mint CPI checks it).</li>
+      <li><code>ProxyState</code> at <code>derive_proxy_state(&amp;branded).0</code>: 115 bytes per the layout table (appendix), owner = the proxy program, realistic mid-life values (e.g. fee 200 bps, principal 950_000_000, commission 1_000_000, supply set consistently, bump = the real derived bump).</li>
+      <li>oracle at the PINNED <code>ids::ORACLE</code> address: 17 bytes (slot, price, precision 12; e.g. price 1_050_000_000_000 for 1.05), owner = <code>PRicevBH6BaeaE8qmrxrwGBZ5hSZ9vjBNue5Ygot1ML</code> (the program pins the KEY, so the owner just needs to be plausible - <b>V2: confirm the proxy program does not also check the oracle account owner</b>; read <code>~/projects/reflect/reflect-proxy-program/program/src</code> wrap handler. If it does, use the exact owner - which we verified is the live one anyway).</li>
+      <li>vault ATA of (proxy_state, stablecoin) funded to cover principal + interest; user ATAs for both mints (source u64::MAX-ish, dest 0) - reuse lending's <code>set_token_account</code> helper.</li>
+      <li>Clock sysvar: <code>svm.set_sysvar::&lt;SolanaClock&gt;</code> with a slot within 200 of the oracle slot.</li>
+    </ul>
+  </li>
+  <li><b>Tests</b> (all <code>#[tokio::test(flavor = "current_thread")]</code>, fresh SVM per amount):
+    <ul>
+      <li><code>parity_wrap_and_unwrap_swept</code>: ~8 amounts per direction spanning 1_000 to vault-scale; assert dest-ATA delta == <code>quote.expected_output</code> atom-exact AND src delta == amount (both ops are spend-exact, unlike bond mint).</li>
+      <li><code>parity_roundtrip_drift</code>: wrap then unwrap quote-only, drift bounded (floor rounding only, so &le; a few atoms - assert &le; 0.1%).</li>
+      <li><code>edge_zero_and_stale_oracle</code>: zero &rArr; 0 out, not flagged no-liquidity; roll the clock 201+ slots past the oracle &rArr; quote says no-liquidity AND the on-chain wrap reverts - they agree.</li>
+      <li><code>crank_parity</code>: with vault value &gt; principal + commission (unrealized interest), quote and execution must still match atom-exact - this exercises the crank-before-pricing path, the only nontrivial math.</li>
+    </ul>
+  </li>
+</ol>
+
+<h3>10.2 <code>titan/rlp/tests/parity.rs</code> - program-driven state, fully hermetic once built</h3>
+<ol>
+  <li><b>Program binary</b>: build from local source - <code>cd ~/projects/reflect/reflect-program-library/rlp &amp;&amp; anchor build</code> (check <code>Anchor.toml</code> for the toolchain version first; fall back to <code>cargo build-sbf</code> in <code>programs/rlp</code> if anchor-cli versions fight). Copy <code>target/deploy/rlp.so</code> to <code>titan/rlp/tests/fixtures/programs/rlp.so</code>. Gitignored + skip-if-missing; document the build command in the test file header. Do NOT dump devnet (stale layout, verified).</li>
+  <li><b>State initialization - drive the program, do not synthesize Anchor accounts</b>: using the SDK's <code>rlp::ix::admin</code> builders (<code>initialize_rlp</code>, <code>initialize_lp</code>, <code>add_asset</code>, <code>initialize_lp_token_account</code>, permission ixs as V1 dictates), executed in LiteSVM by a funded admin keypair, register TWO Pyth-oracle assets (mint A 6 decimals @ $1.00, mint B 9 decimals @ $2.00). Pyth oracle accounts are synthesized: 101-byte PriceUpdateV2 (layout in appendix), owner = the Pyth receiver program id the rlp program expects - <b>V3: read it from the rlp program's Cargo.toml / source before hardcoding</b>. Then seed liquidity with a real <code>restake</code> from the user. This sequencing IS the forge, in-repo and re-runnable.</li>
+  <li><b>Tests</b>:
+    <ul>
+      <li><code>parity_restake_and_swap_swept</code>: amounts x directions (A&rarr;LP, B&rarr;LP, A&rarr;B, B&rarr;A); dest delta == quote atom-exact; src delta == amount (both rlp ops are spend-exact).</li>
+      <li><code>edge_zero_lp_input_and_over_inventory</code>: zero &rArr; clean 0; LP-input quote errs at the venue (maps to no-liquidity in the shim); a swap sized past the destination vault &rArr; <code>not_enough_liquidity</code> AND on-chain revert - they agree (proves guard D6b matches the program).</li>
+      <li><code>killswitch_gates_and_program_agrees</code>: flip the killswitch via the admin ix (<code>freeze_functionality</code>), assert quote &rArr; no-liquidity and execution reverts (proves guard D6a).</li>
+      <li><code>staleness_edge</code>: publish_time 121s in the past &rArr; no-liquidity + revert agreement.</li>
+    </ul>
+  </li>
+</ol>
+
+<h3>10.3 Jupiter offline parity (both crates)</h3>
+<p>Copy the <code>jupiter/bonds/tests/parity.rs</code> skeleton. Because there is no committed JSON fixture for these products, the Jupiter suites build their state in-process instead of loading a dump:</p>
+<ul>
+  <li><code>jupiter_quote_equals_core_venue</code>: hand-build the account map (whitelabel: the 5 accounts; rlp: reuse the byte-fixture builders from the core unit tests), warm the Amm through <code>update()</code> cycles against that map, wire an independent core venue over the same bytes, assert quote equality over the direction/amount sweep.</li>
+  <li><code>jupiter_quote_errs_on_would_revert</code>: whitelabel - stale oracle &rArr; Err; rlp - LP-input &rArr; Err, over-inventory swap &rArr; Err.</li>
+  <li><code>golden_account_metas_order_per_route</code>: per route (wrap, unwrap / restake, swap), assert the tag mapping, the user as SOLE signer, and eprintln the full indexed meta order - the Jupiter handoff record. For rlp also print the remaining-accounts triple structure (count = 3N).</li>
+  <li>whitelabel extra: <code>wrap_and_unwrap_share_meta_order</code> - assert the two builds produce IDENTICAL meta orders (that is exactly why two tags exist; pin the fact).</li>
+</ul>
+
+<div class="box verify">
+<b>Verify (Phase E)</b>
+<code>cargo test --workspace</code> green offline (parity suites skip cleanly without their .so files).
+With binaries present: <code>cargo test -p reflect-titan-whitelabel --test parity</code> and
+<code>-p reflect-titan-rlp --test parity</code> pass atom-exact. Run the full pre-existing suite too -
+lending + bonds parity must stay untouched.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="phase-f">11. Phase F - WhitelabelSwapVenue (USDC &harr; USDC+), independently shippable</h2>
+
+<p>Small, high-value routing edge: the proxy program's protocol-level stable-swap (1 bps fee, program inventory). Ship after A-E land; nothing else depends on it.</p>
+
+<table>
+<tr><th>Aspect</th><th>Contract</th></tr>
+<tr><td>Market key</td><td>The pinned <code>ids::ORACLE</code> account (exists on mainnet, verified). Singleton market. NO owner check (the oracle is owned by the price program, not the proxy program) - <code>from_market()</code> takes no args beyond nothing; <code>market()</code> returns <code>ids::ORACLE</code>, <code>program_id()</code> returns <code>ids::PROGRAM</code>.</td></tr>
+<tr><td>Discovery</td><td>Fully derivational, single phase: <code>[ORACLE, token_ata(auth, USDC), token_ata(auth, USDC_PLUS), USDC_MINT, USDC_PLUS_MINT]</code> where <code>auth = derive_protocol_authority().0</code>. Mints fetched for decimals only (both are 6, but read them anyway).</td></tr>
+<tr><td>Mints</td><td><code>[USDC (idx 0), USDC_PLUS (idx 1)]</code>.</td></tr>
+<tr><td>Quote</td><td>zero &rArr; <code>Some(0)</code>; direction from input mint (<code>UsdcToUsdcPlus</code> / <code>UsdcPlusToUsdc</code>); delegate <code>proxy::quote_swap(oracle_bytes, amount, dir, clock)</code>; <code>StaleOracle</code> &rArr; <code>None</code>; <b>inventory guard</b>: <code>amount_out &gt; destination authority-ATA balance</code> &rArr; <code>None</code> (the program pays from inventory; the SDK quote reads only the oracle). <code>fee</code> reported as 0 even though a 1 bps fee exists - it is folded into <code>amount_out</code> by the SDK formula, and input-denominating it would double-count. Document this.</td></tr>
+<tr><td>Build</td><td><code>build_swap(&amp;SwapBuildInputs { user, usdc_mint: USDC_MINT, usdc_plus_mint: USDC_PLUS_MINT, oracle: ORACLE }, SwapArgs { amount, is_usdc: input == USDC_MINT, min_out })</code> - infallible; <code>min_out</code> from slippage_bps against the quote (Titan) or 0 (Jupiter).</td></tr>
+<tr><td>Shims</td><td>Fold into the existing whitelabel crates as a second exported type (<code>ReflectWhitelabelSwapVenue</code> / <code>ReflectWhitelabelSwapAmm</code>) - do NOT create new crates. Jupiter tag: <code>Swap::ReflectProxySwap</code> (placeholder). Titan protocol variant: reuse <code>ReflectWhitelabel</code>.</td></tr>
+<tr><td>Parity</td><td>Extend <code>titan/whitelabel/tests/parity.rs</code>: synthesize the two authority ATAs with inventory, sweep both directions atom-exact, plus the over-inventory no-route/revert agreement edge.</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="pitfalls">12. Pitfall table (read before coding)</h2>
+
+<table>
+<tr><th>#</th><th>Pitfall</th><th>Guard</th></tr>
+<tr><td>P1</td><td>Assuming USDC+ backing for every proxy market. Several live markets use a different stablecoin (verified).</td><td>Always <code>quote_account_keys_from_state</code>; never plain <code>quote_account_keys</code>.</td></tr>
+<tr><td>P2</td><td>Reusing lending's single-tag direction-from-account-order trick for wrap/unwrap.</td><td>Impossible - identical meta orders. Two Jupiter tags (D8) + the <code>wrap_and_unwrap_share_meta_order</code> test.</td></tr>
+<tr><td>P3</td><td>Mixing up the two staleness models: proxy = 200 SLOTS, rlp = 120 SECONDS.</td><td>Populate both Clock fields everywhere; tests exercise both gates.</td></tr>
+<tr><td>P4</td><td>Treating rlp/proxy as program-id-relative like lending (deriving PDAs against the listed account's owner).</td><td>They are single-deployment; SDK PDAs hardwire the const ids. Venue pins the const and CHECKS the owner (D3). LiteSVM deploys at real addresses.</td></tr>
+<tr><td>P5</td><td>Quoting a swap the pool cannot pay out (SDK reads only oracles).</td><td>Guard D6b: clamp by destination vault (rlp) / authority ATA (proxy swap) balance.</td></tr>
+<tr><td>P6</td><td>Quoting through a killswitched action or a private asset.</td><td>Guards D6a/D6c; parity tests flip the switch and prove revert agreement.</td></tr>
+<tr><td>P7</td><td>Routing LP &rarr; asset.</td><td>Cooldown flow, not a swap. <code>route()</code> rejects; Titan bounds on that pair legitimately errs <code>NoQuotableValue</code>.</td></tr>
+<tr><td>P8</td><td>Stale injected asset list after an admin <code>add_asset</code>.</td><td>Guard D7: load fails on count mismatch vs <code>Settings.assets()</code>; lister re-scans.</td></tr>
+<tr><td>P9</td><td>Forgetting mint accounts in the fetch set (decimals for TokenInfo).</td><td>Whitelabel appends stablecoin mint; rlp's seeds include all asset mint accounts; lp mint is already in <code>pool_discovery_keys</code>. Extra accounts are loader-safe (verified).</td></tr>
+<tr><td>P10</td><td>Using the devnet rlp binary or hand-synthesizing Anchor accounts with guessed discriminators.</td><td>Devnet is STALE (verified). Build from source; create state via the program's own admin ixs (D10).</td></tr>
+<tr><td>P11</td><td><code>Date</code>-like nondeterminism in quotes: proxy quotes change with the crank (vault value vs principal), rlp with oracle prices.</td><td>Parity always pins the Clock sysvar and oracle bytes; fresh SVM per amount (the lending/bonds pattern).</td></tr>
+<tr><td>P12</td><td>Zero-quote contract violations (Titan <code>bounds()</code> panics/livelocks).</td><td>Every venue early-returns <code>Ok(Some(0))</code> at amount 0 BEFORE state access; shim maps errors to <code>expected_output = 0</code>; cold-venue unit tests pin it.</td></tr>
+<tr><td>P13</td><td>Reporting proxy's crank fee or rlp's nonexistent fee as <code>fee_amount</code>.</td><td>D9: always 0. Wrong-unit fees mislead routers more than zero does (bonds precedent).</td></tr>
+<tr><td>P14</td><td>Committing the 10MB-class dumped proxy <code>.so</code> or RPC secrets.</td><td><code>**/tests/fixtures/programs/*.so</code> handling mirrors lending: gitignored unless tiny and locally built; resolver + skip logic copied from <code>titan/lending</code>.</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="dod">13. Definition of done + commit plan</h2>
+
+<h3>Branches</h3>
+<ul>
+  <li><code>reflect-core-sdk</code>: branch <code>feat/rlp-proxy-routing-seams</code> &rarr; PR to main (Phase 0). Push BEFORE finishing the routing work - reflect-routing's path deps work locally either way, but CI/fresh clones need it merged (bonds lesson).</li>
+  <li><code>reflect-routing</code>: branch <code>feat/rlp-whitelabel-routing</code> off <code>feat/refactor-routing-based-on-reflect-core-sdk</code> (or main once that merges).</li>
+</ul>
+
+<h3>Commit sequence (Conventional Commits, one logical change each)</h3>
+<ol>
+  <li><code>feat(sdk): re-export rlp layout views and action ordinals</code> (reflect-core-sdk)</li>
+  <li><code>feat(whitelabel): add shared whitelabel venue core</code></li>
+  <li><code>feat(rlp): add shared rlp venue core</code></li>
+  <li><code>feat(whitelabel): add titan whitelabel venue adapter</code></li>
+  <li><code>feat(rlp): add titan rlp venue adapter</code></li>
+  <li><code>feat(whitelabel): add jupiter whitelabel amm adapter</code></li>
+  <li><code>feat(rlp): add jupiter rlp amm adapter</code></li>
+  <li><code>test(whitelabel): add litesvm quote==execution parity</code></li>
+  <li><code>test(rlp): add litesvm quote==execution parity</code></li>
+  <li><code>test(whitelabel): add hermetic jupiter parity</code> / <code>test(rlp): add hermetic jupiter parity</code></li>
+  <li>Phase F as <code>feat(whitelabel): add usdc/usdc+ stable-swap venue</code> + its test commit.</li>
+</ol>
+
+<h3>Done means</h3>
+<ul>
+  <li><code>cargo build/test/clippy/fmt --workspace</code> green, offline, including all pre-existing lending/bonds suites.</li>
+  <li>With program binaries present: both new Titan parity suites pass atom-exact, including the no-route/revert agreement edges (stale oracle, killswitch, over-inventory, LP-input).</li>
+  <li>V1/V2/V3 verification answers recorded as comments at the guard sites.</li>
+  <li>Golden meta orders printed by the Jupiter suites (the handoff record); tags documented as placeholders pending Jupiter assignment.</li>
+  <li>The rlp lister scan (gPA recipe) and the Jupiter <code>params</code> schema documented in rustdoc.</li>
+</ul>
+
+<h3>Known non-goals (do not build)</h3>
+<ul>
+  <li>LP withdrawal routing (cooldown), <code>claim_fees</code>, crank/admin flows, permissioned/private assets.</li>
+  <li>ExactOut anywhere.</li>
+  <li>A shared venue trait, config files, or new dependencies beyond <code>serde_json</code> in jupiter/rlp.</li>
+  <li>Real Jupiter Swap tag wire values (cross-org, pending; placeholders only).</li>
+  <li>Mainnet rlp listing - the program is not deployed there yet; the adapter is ready for when it is.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="appendix">14. Appendix</h2>
+
+<h3>14.1 Files that are the source of truth (read them, do not trust memory)</h3>
+<div class="overflow">
+<table>
+<tr><th>Topic</th><th>File</th></tr>
+<tr><td>Venue-core pattern to mirror</td><td><code>reflect-routing/core/src/lib.rs</code> (LendingVenue), <code>core/src/bonds.rs</code> (BondVenue)</td></tr>
+<tr><td>Titan shim pattern</td><td><code>reflect-routing/titan/bonds/src/reflect.rs</code> (+ vendored <code>trading_venue/</code>, <code>account_caching/</code>)</td></tr>
+<tr><td>Jupiter shim pattern</td><td><code>reflect-routing/jupiter/bonds/src/{lib.rs, swap.rs}</code></td></tr>
+<tr><td>Parity harness patterns</td><td><code>reflect-routing/titan/lending/tests/parity.rs</code> (RPC program dump, skip logic), <code>titan/bonds/tests/parity.rs</code> (snapshot-free reflect-only SVM)</td></tr>
+<tr><td>Proxy SDK</td><td><code>reflect-core-sdk/src/proxy/{mod,accounts,quote,quote_accounts,build,ix,ids,pda}.rs</code></td></tr>
+<tr><td>RLP SDK</td><td><code>reflect-core-sdk/src/rlp/{mod,accounts,discovery,quote,quote_accounts,build,ix,ids,pda,resolve}.rs</code></td></tr>
+<tr><td>Byte layouts + views</td><td><code>reflect-protocol-core/src/rlp/layout.rs</code>, <code>reflect-protocol-core/src/proxy/mod.rs</code></td></tr>
+<tr><td>Byte-fixture recipes for unit tests</td><td>the <code>#[cfg(test)]</code> blocks in <code>reflect-core-sdk/src/rlp/quote.rs</code>, <code>rlp/accounts.rs</code>, <code>proxy/quote.rs</code> (Pyth buffer, oracle buffer, mint/token buffers, state buffers)</td></tr>
+<tr><td>End-to-end SDK usage examples</td><td><code>reflect-core-sdk/examples/offchain/src/bin/{whitelabel,insurance}.rs</code></td></tr>
+<tr><td>RLP program source (V1, V3, parity build)</td><td><code>reflect-program-library/rlp/</code> (Anchor workspace)</td></tr>
+<tr><td>Proxy program source (V2)</td><td><code>reflect-proxy-program/program/</code></td></tr>
+</table>
+</div>
+
+<h3>14.2 Account layouts (verified offsets, discriminator included)</h3>
+<div class="overflow">
+<table>
+<tr><th>Account</th><th>Size</th><th>Discriminator @0</th><th>Fields</th></tr>
+<tr><td>proxy <code>ProxyState</code></td><td>115 (exact)</td><td>NONE (length check only)</td><td>branded_mint @0..32, stablecoin_mint @32..64, fee u16 @64, principal u64 @66, integrators_commission u64 @74, authority @82..114, bump @114</td></tr>
+<tr><td>proxy <code>Oracle</code></td><td>17</td><td>NONE</td><td>slot u64 @0, price u64 @8, precision u8 @16; stale iff <code>now_slot - slot &gt; 200</code></td></tr>
+<tr><td>rlp <code>Settings</code></td><td>374</td><td><code>[223,179,163,190,177,224,67,173]</code></td><td>bump @8, liquidity_pools u8 @9, assets u8 @10, frozen u8 @11, access map @12..373, killswitch u8 @373</td></tr>
+<tr><td>rlp <code>LiquidityPool</code></td><td>58</td><td><code>[66,38,17,64,188,80,68,129]</code></td><td>bump @8, index u8 @9, lp_token @10..42, cooldowns u64 @42, cooldown_duration u64 @50</td></tr>
+<tr><td>rlp <code>Asset</code></td><td>74</td><td><code>[234,180,241,252,139,224,160,8]</code></td><td>mint @8..40, oracle enum tag u8 @40 (0=Pyth, 1=Switchboard), oracle key @41..73, access_level u8 @73 (0=Public, 1=Private)</td></tr>
+<tr><td>rlp <code>Cooldown</code></td><td>49</td><td><code>[50,166,94,192,234,64,152,208]</code></td><td>authority, liquidity_pool_id, unlock_ts (see CooldownView)</td></tr>
+<tr><td>Pyth <code>PriceUpdateV2</code> (synth for tests)</td><td>101</td><td><code>[34,241,35,99,157,126,244,205]</code></td><td>verification level byte @40 (1 = Full), price i64 @73, exponent i32 @89, publish_time i64 @93</td></tr>
+<tr><td>SPL Mint</td><td>82</td><td>-</td><td>supply u64 @36, decimals u8 @44</td></tr>
+<tr><td>SPL TokenAccount</td><td>165</td><td>-</td><td>amount u64 @64</td></tr>
+</table>
+</div>
+
+<h3>14.3 Instruction wire formats</h3>
+<div class="overflow">
+<table>
+<tr><th>Ix</th><th>Data</th><th>Metas</th></tr>
+<tr><td>proxy wrap</td><td><code>[1] ++ amount u64 LE ++ min_branded u64 LE</code> (17 B)</td><td rowspan="2">8, SAME order both ops: user (signer, ro), stablecoin_user_ata (w), branded_user_ata (w), proxy_state (w), vault (w), branded_mint (w), oracle (ro), token_program (ro)</td></tr>
+<tr><td>proxy unwrap</td><td><code>[2] ++ amount ++ min_usdc_plus</code> (17 B)</td></tr>
+<tr><td>proxy swap</td><td><code>[100] ++ amount u64 ++ is_usdc u8 ++ min_output u64</code> (18 B)</td><td>8: user (signer, ro), usdc_user_ata (w), usdc_plus_user_ata (w), authority (w, ["auth"] PDA), usdc_authority_ata (w), usdc_plus_authority_ata (w), oracle (ro), token_program (ro)</td></tr>
+<tr><td>rlp restake</td><td>anchor disc <code>[97,161,241,167,6,32,213,53]</code> ++ <code>u8 index, u64 amount, u64 min_lp</code></td><td>14 named + 3N remaining triples <code>[pool_ata, asset_pda, oracle]</code> all ro; triples must cover EVERY registered asset; Anchor optional-None = ro meta on RLP_PROGRAM itself</td></tr>
+<tr><td>rlp swap</td><td>anchor disc <code>[248,198,158,145,225,117,135,200]</code> ++ <code>u64 amount_in, Option&lt;u64&gt; min_out</code> (Borsh 1-tag-byte)</td><td>16 named</td></tr>
+</table>
+</div>
+
+<h3>14.4 Quote math (for eyeballing parity failures)</h3>
+<pre><code>// proxy (all floor; VIRT = 1_000_000 on both sides; price fixed-point 10^precision)
+crank:  interest = sat(vault_usd - (principal + commission));  commission += floor(interest * fee_bps / 10_000); principal += rest
+wrap:   usd = floor(amount * price / 10^prec);  branded_out = floor(usd * (supply + VIRT) / (principal' + VIRT))
+unwrap: usd = floor(amount * (principal' + VIRT) / (supply + VIRT));  out = floor(usd * 10^prec / price)
+swap:   usdc-&gt;usdc+ : floor(amount * 10^prec * 9_999 / price / 10_000);  reverse: floor(amount * price * 9_999 / 10_000 / 10^prec)
+
+// rlp
+restake: lp_out = deposit_usd / pool_usd_total * lp_supply   (1:1 with USD on empty pool)
+swap:    out = amount_in * price_from / price_to             (oracle cross-rate, no fee)
+staleness: publish_time + 120 &lt; clock.unix =&gt; StaleOracle</code></pre>
+
+<p class="muted" style="margin-top:3rem">
+Research basis: reflect-core-sdk proxy/rlp modules read in full; jupiter/titan lending+bonds shims read in full;
+protocol-core rlp layout verified; mainnet/devnet state checked via RPC on 2026-07-07.
+Where this plan and current code disagree, the code wins - re-verify before implementing.
+</p>
+
+</main>
+</body>
+</html>
