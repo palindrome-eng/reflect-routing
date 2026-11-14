@@ -125,7 +125,8 @@ impl BondVenue {
     /// Quote `amount` of `input_mint` into `output_mint`, ExactIn.
     ///
     /// `None` is "no route": the SDK predicts a revert (supply floor / cap /
-    /// a partial-fill redeem that can't absorb the full receipt burn).
+    /// a partial-fill redeem that can't absorb the full receipt burn) or
+    /// cannot compute the amount.
     /// `amount == 0` returns `Some(zero)` before touching `loaded` - the
     /// documented zero-input contract (`bounds()` binary-searches on it;
     /// never panics, even on a cold venue).
@@ -135,8 +136,7 @@ impl BondVenue {
     /// outputs) - a wrong-unit fee would mislead a router more than zero does.
     ///
     /// # Errors
-    /// If the venue isn't loaded, or the SDK quote call fails (malformed
-    /// state or an unrelated mint pair).
+    /// If the venue isn't loaded, or the mint pair is not a route of the basket.
     pub fn quote(&self, input_mint: Pubkey, output_mint: Pubkey, amount: u64, clock: Now) -> Result<Option<RouteQuote>> {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
@@ -149,7 +149,9 @@ impl BondVenue {
         }
         let loaded = self.loaded()?;
         let Some(k) = self.core.at(clock, || loaded.index_core(clock).ok()) else { return Ok(None) };
-        let q = route.quote(&k, amount).map_err(|e| anyhow!("quote: {e:?}"))?;
+        // An amount the SDK math cannot carry fails the program's own checked arithmetic: no
+        // route. NOT an error value: Titan's `bounds()` search runs with the heap disabled.
+        let Ok(q) = route.quote(&k, amount) else { return Ok(None) };
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: 0 }))
     }
 

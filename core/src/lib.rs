@@ -175,12 +175,13 @@ impl LendingVenue {
 
     /// Quote `amount` of `input_mint` into its counterpart mint.
     ///
-    /// `None` is "no route": the SDK predicts a revert (supply floor / cap).
+    /// `None` is "no route": the SDK predicts a revert (supply floor / cap) or
+    /// cannot compute the amount.
     /// `amount == 0` returns `Some(zero)` - the documented zero-input contract
     /// (`bounds()` binary-searches on it; never panics).
     ///
     /// # Errors
-    /// If the venue isn't loaded, or the SDK quote call fails (malformed state).
+    /// If the venue isn't loaded, or `input_mint` is not in the strategy's pair.
     pub fn quote(&self, input_mint: Pubkey, amount: u64, clock: Now) -> Result<Option<RouteQuote>> {
         // Zero input is a hard contract: clean 0, never panic or error. Lending is
         // one pair; the SDK dispatches mint/redeem on the input mint alone.
@@ -196,8 +197,10 @@ impl LendingVenue {
             k.quote_redeem(amount)
         } else {
             bail!("mint {input_mint} is not in this strategy's pair");
-        }
-        .map_err(|e| anyhow!("quote: {e:?}"))?;
+        };
+        // An amount the SDK math cannot carry fails the program's own checked arithmetic: no
+        // route. NOT an error value: Titan's `bounds()` search runs with the heap disabled.
+        let Ok(q) = q else { return Ok(None) };
         // A predicted revert (supply floor / cap / venue limit) is no route, not a bad route.
         Ok(q.would_revert.is_none().then_some(RouteQuote { amount_out: q.amount_out, fee: q.fee }))
     }
