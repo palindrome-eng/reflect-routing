@@ -4,7 +4,7 @@ use reflect_sdk::rlp::ix::{deposit as rlp_deposit, swap as rlp_swap, DepositAcco
 use reflect_sdk::strategy::ix::{mint_index, mint_lending, redeem_lending, IndexAccounts, LendingAccounts};
 use reflect_sdk::{proxy, rlp, strategy};
 use reflect_titan_common::swap_route::{self, Venue as RouteVenue};
-use reflect_titan_router::instructions::venues::reflect::{INDEX_CONTROLLER, LENDING_CONTROLLER, PROXY_BRANDED_MINT, RLP_POOL};
+use reflect_titan_router::instructions::venues::reflect::{INDEX_CONTROLLER, LENDING_CONTROLLER, LENDING_RECEIPT_MINT, PROXY_BRANDED_MINT, RLP_POOL};
 use reflect_titan_router::state::{SwapSpecInputV2, TitanPda, Venue};
 use solana_pubkey::Pubkey;
 
@@ -62,6 +62,7 @@ fn loader_key_slots_match_the_sdk_meta_order() {
     };
     for ix in [mint_lending(&lending, 1, 1, vec![], &strategy::ids::REFLECT_PROGRAM), redeem_lending(&lending, 1, 1, vec![], &strategy::ids::REFLECT_PROGRAM)] {
         assert_eq!(ix.accounts[LENDING_CONTROLLER].pubkey, lending.strategy_controller);
+        assert_eq!(ix.accounts[LENDING_RECEIPT_MINT].pubkey, lending.receipt_mint);
     }
 
     let index = IndexAccounts {

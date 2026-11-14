@@ -169,11 +169,6 @@ impl SwapRouteV3<'_> {
 
             let leg_accounts = &ctx.remaining_accounts[remaining_account_index..remaining_account_index + account_increment];
             if input_amount > 0 {
-                let account_metas = leg_accounts[..account_increment - 1]
-                    .iter()
-                    .map(|account| AccountMeta { pubkey: *account.key, is_signer: account.key == &titan_pda_key || account.is_signer, is_writable: account.is_writable })
-                    .collect::<Vec<_>>();
-
                 let output_before = extract_token_amount(output_token_account)?;
                 let leg = Leg {
                     amount: input_amount,
@@ -181,7 +176,7 @@ impl SwapRouteV3<'_> {
                     out_mint: *ctx.remaining_accounts.get(mints_count + swap.to as usize).ok_or(TemplateError::MissingRemainingAccount)?.key,
                     titan_pda: titan_pda_key,
                 };
-                perform_cpi_swap(&leg, swap, &account_metas, leg_accounts, signer_seeds)?;
+                perform_cpi_swap(&leg, swap, leg_accounts, signer_seeds)?;
 
                 // The leg's floor is checked on what actually landed, so the SDK's own minimum
                 // can stay open and every venue shares one guard.
@@ -260,10 +255,19 @@ pub struct Leg {
     pub titan_pda: Pubkey,
 }
 
-fn perform_cpi_swap<'info>(leg: &Leg, swap: &SwapSpecInputV2, account_metas: &[AccountMeta], account_infos: &'info [AccountInfo<'info>], signer_seeds: &[&[&[u8]]]) -> Result<()> {
+/// The venue instruction's metas: every leg account but the trailing program id, with TitanPDA
+/// as a signer. Built by the venues that forward the leg's accounts as they are.
+pub fn leg_metas(account_infos: &[AccountInfo], titan_pda: &Pubkey) -> Vec<AccountMeta> {
+    account_infos[..account_infos.len() - 1]
+        .iter()
+        .map(|account| AccountMeta { pubkey: *account.key, is_signer: account.key == titan_pda || account.is_signer, is_writable: account.is_writable })
+        .collect()
+}
+
+fn perform_cpi_swap<'info>(leg: &Leg, swap: &SwapSpecInputV2, account_infos: &'info [AccountInfo<'info>], signer_seeds: &[&[&[u8]]]) -> Result<()> {
     match swap.venue {
         Venue::RaydiumAmm => {
-            for instruction in raydium_amm::swap_base_in_v2(leg.amount, account_metas)?.iter() {
+            for instruction in raydium_amm::swap_base_in_v2(leg.amount, &leg_metas(account_infos, &leg.titan_pda))?.iter() {
                 invoke_signed(instruction, account_infos, signer_seeds)?;
             }
         },
