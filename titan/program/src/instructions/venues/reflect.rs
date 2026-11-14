@@ -16,8 +16,10 @@ pub const REFLECT_DEVNET_MOCK: Pubkey = pubkey!("moCKesf95X6JJQ4ZwyDTnWAQD5tbx5Z
 
 /// Deployments a leg may CPI into, per variant. The leg's trailing account must be one of them.
 pub const REFLECT_PROGRAMS: [Pubkey; 2] = [reflect_sdk::strategy::ids::REFLECT_PROGRAM, REFLECT_DEVNET_MOCK];
-pub const RLP_PROGRAMS: [Pubkey; 2] = [reflect_sdk::rlp::ids::RLP_PROGRAM, reflect_sdk::rlp::ids::RLP_STAGING_PROGRAM];
-pub const PROXY_PROGRAMS: [Pubkey; 2] = [reflect_sdk::proxy::ids::PROXY_PROGRAM, reflect_sdk::proxy::ids::PROXY_STAGING_PROGRAM];
+pub const RLP_STAGING_PROGRAM: Pubkey = pubkey!("GSEYK2FtDLywAoxn2mioXCft9FWH6Zn4VmKUArGyTVj8");
+pub const PROXY_STAGING_PROGRAM: Pubkey = pubkey!("HvX27r2MoKn6oakkmcAgMo5ZFhheGKQ5Ht2KL3sk5ANM");
+pub const RLP_PROGRAMS: [Pubkey; 2] = [reflect_sdk::rlp::ids::RLP_PROGRAM, RLP_STAGING_PROGRAM];
+pub const PROXY_PROGRAMS: [Pubkey; 2] = [reflect_sdk::proxy::ids::PROXY_PROGRAM, PROXY_STAGING_PROGRAM];
 
 /// Named-meta position of the account each SDK loader is keyed on, per instruction family
 /// (`reflect_sdk::{strategy, rlp, proxy}::ix` meta order). `tests/venue_parity.rs` proves them.

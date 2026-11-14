@@ -2395,11 +2395,9 @@ name = "reflect-jupiter-bonds"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "reflect-jupiter-common",
  "reflect-routing-core",
  "reflect-sdk",
- "serde_json",
  "solana-sdk",
  "tokio",
 ]
@@ -2410,6 +2408,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "base64 0.22.1",
  "serde_json",
  "solana-sdk",
 ]
@@ -2419,11 +2418,9 @@ name = "reflect-jupiter-lending"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "reflect-jupiter-common",
  "reflect-routing-core",
  "reflect-sdk",
- "serde_json",
  "solana-sdk",
  "tokio",
 ]
@@ -2468,24 +2465,16 @@ dependencies = [
 
 [[package]]
 name = "reflect-sdk"
-version = "0.20.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.20.0#dc2ce5f877974ba79d4940399ca8dd54711768ad"
+version = "2.1.0"
+source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v2.1.0#161ca20a21bbcef4d0a2e47af7903da471d67f18"
 dependencies = [
  "anchor-lang",
- "reflect-sdk-core",
  "solana-account",
  "solana-account-info",
  "solana-cpi",
  "solana-instruction",
  "solana-program-error",
  "solana-pubkey",
-]
-
-[[package]]
-name = "reflect-sdk-core"
-version = "0.20.0"
-source = "git+https://github.com/palindrome-eng/reflect-sdk?tag=v0.20.0#dc2ce5f877974ba79d4940399ca8dd54711768ad"
-dependencies = [
  "uint",
 ]
 
@@ -2494,21 +2483,16 @@ name = "reflect-titan-bonds"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
- "bincode",
  "litesvm",
  "reflect-routing-core",
  "reflect-sdk",
  "reflect-titan-common",
- "serde_json",
  "solana-account",
  "solana-instruction",
  "solana-program",
- "solana-program-pack",
  "solana-pubkey",
  "solana-sdk",
  "spl-associated-token-account",
- "spl-token 7.0.0",
  "tokio",
 ]
 
@@ -2538,22 +2522,15 @@ name = "reflect-titan-lending"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
- "bincode",
  "litesvm",
- "rand 0.8.6",
  "reflect-routing-core",
  "reflect-sdk",
  "reflect-titan-common",
- "serde_json",
  "solana-account",
  "solana-instruction",
  "solana-program",
- "solana-program-pack",
  "solana-pubkey",
  "solana-sdk",
- "spl-associated-token-account",
- "spl-token 7.0.0",
  "tokio",
 ]
 

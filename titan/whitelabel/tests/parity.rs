@@ -20,7 +20,8 @@ use solana_sdk::clock::Clock;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
-use reflect_sdk::proxy::ids::{PROXY_PROGRAM, PROXY_STAGING_PROGRAM};
+use reflect_sdk::proxy::ids::PROXY_PROGRAM;
+const PROXY_STAGING_PROGRAM: Pubkey = Pubkey::from_str_const("HvX27r2MoKn6oakkmcAgMo5ZFhheGKQ5Ht2KL3sk5ANM");
 use reflect_sdk::proxy::ProxyStateView;
 
 use reflect_titan_common::harness::*;

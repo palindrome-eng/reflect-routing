@@ -230,13 +230,17 @@ mod tests {
         b[114] = bump;
         b
     }
-    // Asset, prod layout (98 B): stablecoin(32) oracle(32)@32 active@64 bump@65 feed_id(32)@66.
+    // Asset (259 B): stablecoin(32) active@32 bump@33 leg_count@34 version@35 flags@38 legs@40;
+    // a leg is oracle(32) feed_id(32) and 9 B of bounds.
     fn asset_buf(stablecoin: &Pubkey, oracle: &Pubkey, active: bool) -> Vec<u8> {
-        let mut b = vec![0u8; 98];
+        let mut b = vec![0u8; 259];
         b[0..32].copy_from_slice(stablecoin.as_ref());
-        b[32..64].copy_from_slice(oracle.as_ref());
-        b[64] = active as u8;
-        b[66..98].copy_from_slice(oracle.as_ref()); // feed_id == oracle key, matched below
+        b[32] = active as u8;
+        b[34] = 1;
+        b[35] = 2;
+        b[38] = 1;
+        b[40..72].copy_from_slice(oracle.as_ref());
+        b[72..104].copy_from_slice(oracle.as_ref()); // feed_id == oracle key, matched below
         b
     }
     fn mint_buf(supply: u64, decimals: u8) -> Vec<u8> {
