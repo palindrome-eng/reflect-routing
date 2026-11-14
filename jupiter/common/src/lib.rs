@@ -185,3 +185,33 @@ impl From<SolanaClock> for ClockRef {
         }
     }
 }
+
+/// A mainnet snapshot of one market, in the shape of the Titan suites' fixtures.
+#[cfg(feature = "fixtures")]
+pub struct Snapshot {
+    /// The market account's owner.
+    pub program_id: Pubkey,
+    pub market: Pubkey,
+    /// The clock the snapshot was read at.
+    pub clock: solana_sdk::clock::Clock,
+    pub map: AccountMap,
+}
+
+#[cfg(feature = "fixtures")]
+impl Snapshot {
+    /// Read the snapshot at `path`; a missing or malformed fixture panics.
+    pub fn load(path: &std::path::Path, market: &str) -> Self {
+        use base64::Engine;
+        let pk = |v: &serde_json::Value| -> Pubkey { v.as_str().unwrap().parse().expect("pubkey") };
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("read fixture")).expect("parse fixture");
+        let clock = solana_sdk::clock::Clock { slot: v["slot"].as_u64().unwrap(), unix_timestamp: v["unix_timestamp"].as_i64().unwrap(), ..Default::default() };
+        let mut map = AccountMap::default();
+        for a in v["accounts"].as_array().unwrap() {
+            let data = base64::engine::general_purpose::STANDARD.decode(a["data"].as_str().unwrap()).expect("b64");
+            map.insert(pk(&a["key"]), Account { lamports: 1, data, owner: pk(&a["owner"]), executable: false, rent_epoch: 0 });
+        }
+        let market: Pubkey = market.parse().expect("pubkey");
+        let program_id = map.get(&market).expect("market in snapshot").owner;
+        Self { program_id, market, clock, map }
+    }
+}

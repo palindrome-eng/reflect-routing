@@ -11,3 +11,9 @@ solana-sdk = "2.2"
 # KeyedAccount.params carries per-market listing config (e.g. rlp's injected
 # asset-mint set, since Settings stores only a count - see reflect-jupiter-rlp).
 serde_json = "1"
+# `fixtures`: the mainnet snapshot loader the jupiter/<product> parity suites share as a
+# dev-dependency; off in the shipped library.
+base64 = { version = "0.22", optional = true }
+
+[features]
+fixtures = ["dep:base64"]

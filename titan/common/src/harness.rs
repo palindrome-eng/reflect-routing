@@ -189,6 +189,26 @@ pub fn try_send(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair) -> Result<(
     result.map(|_| ()).map_err(|e| e.meta.logs)
 }
 
+/// One signed v0 transaction for `ixs`. Every account that is not a signer or a program goes
+/// through a lookup table forged for this call: a lending instruction names more accounts
+/// than the static keys of one transaction hold.
+pub fn v0_tx(svm: &mut LiteSVM, ixs: &[Instruction], payer: &Keypair) -> solana_sdk::transaction::VersionedTransaction {
+    use solana_sdk::address_lookup_table::state::{AddressLookupTable, LookupTableMeta};
+    let mut addresses: Vec<Pubkey> = ixs.iter().flat_map(|ix| &ix.accounts).filter(|m| !m.is_signer).map(|m| m.pubkey).collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    let key = Pubkey::new_unique();
+    let table = AddressLookupTable { meta: LookupTableMeta { authority: None, ..Default::default() }, addresses: std::borrow::Cow::Borrowed(&addresses) };
+    svm.set_account(
+        key,
+        Account { lamports: 10_000_000_000, data: table.serialize_for_tests().unwrap(), owner: solana_sdk::address_lookup_table::program::ID, executable: false, rent_epoch: 0 },
+    )
+    .unwrap();
+    let table = solana_sdk::address_lookup_table::AddressLookupTableAccount { key, addresses };
+    let message = solana_sdk::message::v0::Message::try_compile(&payer.pubkey(), ixs, &[table], svm.latest_blockhash()).expect("compile v0 message");
+    solana_sdk::transaction::VersionedTransaction::try_new(solana_sdk::message::VersionedMessage::V0(message), &[payer]).expect("sign")
+}
+
 /// The live LiteSVM state as an [`AccountsCache`].
 pub struct SvmCache<'a>(pub &'a LiteSVM);
 
@@ -210,7 +230,6 @@ impl AccountsCache for SvmCache<'_> {
 
 use crate::trading_venue::{QuoteRequest, QuoteResult, SwapType, TradingVenue};
 use solana_sdk::account::ReadableAccount;
-use solana_sdk::transaction::Transaction as SdkTransaction;
 
 /// Deterministic xorshift64* so every sampled failure is reproducible from `seed`.
 pub struct Rng(u64);
@@ -242,24 +261,39 @@ pub fn geometric_grid(lb: u64, ub: u64, n: usize) -> Vec<u64> {
     pts
 }
 
-fn exact_in(input_mint: Pubkey, output_mint: Pubkey, amount: u64) -> QuoteRequest {
+pub fn exact_in(input_mint: Pubkey, output_mint: Pubkey, amount: u64) -> QuoteRequest {
     QuoteRequest { input_mint, output_mint, amount, swap_type: SwapType::ExactIn }
 }
 
-/// Simulate the venue's instruction for `req` as `user` WITHOUT committing state and return the
-/// out-mint balance delta, or `None` with the logs printed when the program refuses it.
-pub fn simulate_delta(svm: &LiteSVM, venue: &dyn TradingVenue, user: &Keypair, req: QuoteRequest) -> Option<u64> {
-    let dst = spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &req.output_mint, &token_program_of(venue, req.output_mint));
-    let before = token_balance(svm, &dst);
+/// The venue for `market`, loaded over `cache`.
+pub async fn venue_over<V: crate::trading_venue::FromAccount + TradingVenue>(cache: &dyn AccountsCache, market: &Pubkey) -> V {
+    let account = cache.get_account(market).await.expect("fetch").expect("market account");
+    let mut venue = V::from_account(market, &account).expect("from_account");
+    venue.update_state(cache).await.expect("update_state");
+    venue
+}
+
+/// [`simulate`]'s out-mint balance delta.
+pub fn simulate_delta(svm: &mut LiteSVM, venue: &dyn TradingVenue, user: &Keypair, req: QuoteRequest) -> Option<u64> {
+    simulate(svm, venue, user, req).map(|(_, gained)| gained)
+}
+
+/// Simulate the venue's instruction for `req` as `user` WITHOUT committing state and return
+/// `(in-mint spent, out-mint gained)`, or `None` with the logs printed when the program
+/// refuses it.
+pub fn simulate(svm: &mut LiteSVM, venue: &dyn TradingVenue, user: &Keypair, req: QuoteRequest) -> Option<(u64, u64)> {
+    let token = |mint: Pubkey| spl_associated_token_account::get_associated_token_address_with_program_id(&user.pubkey(), &mint, &token_program_of(venue, mint));
+    let (src, dst) = (token(req.input_mint), token(req.output_mint));
+    let (src_before, before) = (token_balance(svm, &src), token_balance(svm, &dst));
     let ix = venue.generate_swap_instruction(req, user.pubkey()).ok()?;
     // Upstream simulates under a 1.4M CU budget; a lending mint with its venue CPI exceeds
     // the runtime's 200k default.
     let budget = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
-    let tx = SdkTransaction::new_signed_with_payer(&[budget, ix], Some(&user.pubkey()), &[user], svm.latest_blockhash());
+    let tx = v0_tx(svm, &[budget, ix], user);
     match svm.simulate_transaction(tx) {
         Ok(info) => {
-            let post = info.post_accounts.iter().find(|(k, _)| *k == dst).map(|(_, a)| a.data()[64..72].try_into().map(u64::from_le_bytes).unwrap())?;
-            Some(post - before)
+            let post = |key: Pubkey| info.post_accounts.iter().find(|(k, _)| *k == key).map(|(_, a)| a.data()[64..72].try_into().map(u64::from_le_bytes).unwrap());
+            Some((src_before - post(src)?, post(dst)? - before))
         },
         Err(e) => {
             for l in &e.meta.logs {
@@ -300,7 +334,7 @@ fn valid(q: &QuoteResult) -> bool {
 /// zero-input spot, bound simulation (atom-exact at both edges), 50 seeded random samples
 /// (atom-exact), output monotone over 50 samples, price non-increasing over 200 samples
 /// (1e-3 slack), and the mean-value bracket over a 64-point geometric grid (1e-5 slack plus
-/// two output atoms of floor).
+/// two atoms of floor in the coarser token).
 pub fn assert_titan_contract<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, seed: u64) {
     const PRICE_TOL: f64 = 1e-3;
     const MVT_TOL: f64 = 1e-5;
@@ -367,7 +401,9 @@ pub fn assert_titan_contract<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, seed
                 continue;
             }
             let chord = (qb.expected_output - qa.expected_output) as f64 / (b - a) as f64;
-            let atol = OUT_QUANTUM / (b - a) as f64;
+            // The programs floor in the coarser token's atoms: one input atom of floor is
+            // `price` output atoms when the output token has the finer atom.
+            let atol = OUT_QUANTUM * qa.price.max(1.0) / (b - a) as f64;
             assert!(qb.price <= qa.price * (1.0 + MVT_TOL), "{dir}: price increased with size: f'({a})={} < f'({b})={}", qa.price, qb.price);
             assert!(chord <= qa.price * (1.0 + MVT_TOL) + atol, "{dir}: chord {chord} exceeds left price {} on [{a}, {b}]", qa.price);
             assert!(chord >= qb.price * (1.0 - MVT_TOL) - atol, "{dir}: chord {chord} below right price {} on [{a}, {b}]", qb.price);
@@ -499,14 +535,15 @@ pub fn assert_titan_route<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, router:
                 ];
                 accounts.extend(leg_accounts);
                 let ix = Instruction { program_id: ROUTER_PROGRAM_ID, accounts, data: encode_swap_route_v3_data(amount, 2, &[leg]) };
-                let budget = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
-                SdkTransaction::new_signed_with_payer(&[budget, ix], Some(&user.pubkey()), &[&user], svm.latest_blockhash())
+                [solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000), ix]
             };
 
-            let refused = svm.simulate_transaction(route(q.expected_output + 1)).expect_err(&format!("{dir}: a floor above the quote must be refused at {amount}"));
+            let tx = v0_tx(svm, &route(q.expected_output + 1), &user);
+            let refused = svm.simulate_transaction(tx).expect_err(&format!("{dir}: a floor above the quote must be refused at {amount}"));
             assert!(refused.meta.logs.iter().any(|l| l.contains("MinimumOutput")), "{dir}: refused for another reason at {amount}:\n{}", refused.meta.logs.join("\n"));
 
-            let info = svm.simulate_transaction(route(q.expected_output)).unwrap_or_else(|e| panic!("{dir}: route failed at {amount}:\n{}\n{:?}", e.meta.logs.join("\n"), e.err));
+            let tx = v0_tx(svm, &route(q.expected_output), &user);
+            let info = svm.simulate_transaction(tx).unwrap_or_else(|e| panic!("{dir}: route failed at {amount}:\n{}\n{:?}", e.meta.logs.join("\n"), e.err));
             assert_eq!(post_balance(&info, &user_out), q.expected_output, "{dir}: user output != quote at {amount}");
             assert_eq!(post_balance(&info, &user_in), 0, "{dir}: input not fully spent at {amount}");
             assert!(post_balance(&info, &titan_in) >= RESERVED_IN, "{dir}: TitanPDA input custody drained at {amount}");
@@ -514,4 +551,94 @@ pub fn assert_titan_route<V: TradingVenue>(svm: &mut LiteSVM, venue: &V, router:
             eprintln!("titan route: {dir} ok: {amount} in, {} out ({} CU)", q.expected_output, info.meta.compute_units_consumed);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot capture from an RPC node, for the `capture_snapshot` tests. JSON-RPC
+// goes through the system `curl`.
+// ---------------------------------------------------------------------------
+
+fn rpc(url: &str, method: &str, params: serde_json::Value) -> serde_json::Value {
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+    let out = std::process::Command::new("curl").args(["-sS", "--fail", "-X", "POST", "-H", "content-type: application/json", "-d", &body, url]).output().expect("run curl");
+    assert!(out.status.success(), "{method} failed: {}", String::from_utf8_lossy(&out.stderr));
+    let mut v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("rpc json");
+    assert!(v.get("error").is_none(), "{method} failed: {v}");
+    v["result"].take()
+}
+
+/// `keys` at ONE finalized slot. At most 100 keys: the `getMultipleAccounts` limit.
+fn fetch(url: &str, keys: &[Pubkey]) -> (u64, Vec<Option<Account>>) {
+    assert!(keys.len() <= 100, "{} keys do not fit one getMultipleAccounts call", keys.len());
+    let names: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+    let r = rpc(url, "getMultipleAccounts", serde_json::json!([names, {"encoding": "base64", "commitment": "finalized"}]));
+    let accounts = r["value"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (!a.is_null()).then(|| Account {
+                lamports: a["lamports"].as_u64().unwrap(),
+                data: base64::engine::general_purpose::STANDARD.decode(a["data"][0].as_str().unwrap()).unwrap(),
+                owner: a["owner"].as_str().unwrap().parse().unwrap(),
+                executable: a["executable"].as_bool().unwrap(),
+                rent_epoch: 0,
+            })
+        })
+        .collect();
+    (r["context"]["slot"].as_u64().unwrap(), accounts)
+}
+
+/// An [`AccountsCache`] over RPC that records every key a venue asks for.
+pub struct RpcCache {
+    url: String,
+    seen: std::sync::Mutex<std::collections::BTreeSet<Pubkey>>,
+}
+
+impl RpcCache {
+    pub fn new(url: &str) -> Self {
+        Self { url: url.to_string(), seen: Default::default() }
+    }
+}
+
+#[async_trait]
+impl AccountsCache for RpcCache {
+    async fn get_account(&self, pubkey: &Pubkey) -> Result<Option<Account>, AccountCacheError> {
+        Ok(self.get_accounts(&[*pubkey]).await?.remove(0))
+    }
+    async fn get_accounts(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>, AccountCacheError> {
+        self.seen.lock().unwrap().extend(pubkeys.iter().copied());
+        Ok(pubkeys.chunks(100).flat_map(|c| fetch(&self.url, c).1).collect())
+    }
+}
+
+/// Write `<fixtures>/snapshots/<name>.json`: every account `venue` read through `cache` and
+/// every account its instruction names in each direction, all fetched at ONE slot. Programs
+/// are left out; `SOURCES.md` lists their dumps.
+pub fn capture<V: TradingVenue>(cache: &RpcCache, venue: &V, fixtures: &Path, name: &str) {
+    let mut keys = cache.seen.lock().unwrap().clone();
+    let user = Pubkey::new_unique();
+    for (i, j) in venue.directions_num() {
+        let (in_mint, out_mint) = (venue.get_token(i as usize).unwrap().pubkey, venue.get_token(j as usize).unwrap().pubkey);
+        // A direction with no capacity builds no instruction; its accounts are the other directions'.
+        let Ok((lb, _)) = venue.bounds(i, j) else { continue };
+        if let Ok(ix) = venue.generate_swap_instruction(exact_in(in_mint, out_mint, lb), user) {
+            keys.extend(ix.accounts.iter().map(|m| m.pubkey));
+        }
+    }
+    let keys: Vec<Pubkey> = keys.into_iter().collect();
+    let (slot, fetched) = fetch(&cache.url, &keys);
+    let unix_timestamp = rpc(&cache.url, "getBlockTime", serde_json::json!([slot])).as_i64().expect("block time of the snapshot slot");
+    let accounts: Vec<serde_json::Value> = keys
+        .iter()
+        .zip(fetched)
+        .filter_map(|(k, a)| {
+            a.filter(|a| !a.executable)
+                .map(|a| serde_json::json!({"key": k.to_string(), "owner": a.owner.to_string(), "data": base64::engine::general_purpose::STANDARD.encode(&a.data)}))
+        })
+        .collect();
+    let path = fixtures.join(format!("snapshots/{name}.json"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_string_pretty(&serde_json::json!({"slot": slot, "unix_timestamp": unix_timestamp, "accounts": accounts})).unwrap()).unwrap();
+    eprintln!("captured {} accounts at slot {slot} into {}", accounts.len(), path.display());
 }

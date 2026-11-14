@@ -10,78 +10,37 @@
 //!   - the `account_metas` ORDER, which the on-chain ReflectS1 handler indexes
 //!     positionally — the binding contract handed to Jupiter.
 //!
-//! OFFLINE: state is the committed forged snapshot shared with the Titan suite
-//! (`titan/lending/tests/fixtures/forged_reserve_save.json`). The program id is
-//! the forge's (`moCKesf…`), read from the controller account's owner — the
-//! adapter is program-id-relative, so nothing is hardcoded to mainnet.
+//! OFFLINE: state is the committed mainnet snapshot shared with the Titan suite
+//! (`titan/lending/tests/fixtures/snapshots/lending.json`). The program id is
+//! read from the controller account's owner.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use solana_sdk::account::Account;
-use solana_sdk::clock::Clock as SolanaClock;
 use solana_sdk::pubkey::Pubkey;
 
 use reflect_sdk::common::Now as ReflectClock;
 use reflect_sdk::strategy::{pda, FetchedAccount, Strategy};
 
-use reflect_jupiter_common::{AccountMap, Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Swap, SwapMode, SwapParams};
+use reflect_jupiter_common::{Amm, AmmContext, ClockRef, KeyedAccount, QuoteParams, Snapshot, Swap, SwapMode, SwapParams};
 use reflect_jupiter_lending::ReflectLendingAmm;
 
-/// The forge dumps its store here (see reflect-core `routing_tests.rs`). Jupiter
-/// reuses the Titan crate's committed copy rather than duplicating it.
+/// The lending strategy in the snapshot.
+const CONTROLLER: &str = "7hHkpUXHXudwSE7HKctjntJLmJM82sZ3wqzWvJevTJch";
+
+/// Jupiter reuses the Titan crate's committed snapshot.
 fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../titan/lending/tests/fixtures/forged_reserve_save.json")
-}
-
-fn pk(s: &str) -> Pubkey {
-    s.parse().expect("pubkey")
-}
-
-/// Parsed fixture: the forge program id (controller owner), the controller PDA,
-/// the snapshot clock, and every forged account under its real key.
-struct Snapshot {
-    program_id: Pubkey,
-    controller: Pubkey,
-    clock: SolanaClock,
-    map: AccountMap,
-}
-
-fn load_snapshot() -> Snapshot {
-    let raw = std::fs::read(fixture_path()).expect("read fixture");
-    let v: serde_json::Value = serde_json::from_slice(&raw).expect("parse fixture");
-
-    let program_id = pk(v["program_id"].as_str().unwrap());
-    let controller = pk(v["controller"].as_str().unwrap());
-    let clock = SolanaClock { slot: v["slot"].as_u64().unwrap(), unix_timestamp: v["unix"].as_i64().unwrap(), ..Default::default() };
-
-    let mut map = AccountMap::default();
-    for rec in v["accounts"].as_array().unwrap() {
-        let a = &rec["account"];
-        map.insert(
-            pk(rec["pubkey"].as_str().unwrap()),
-            Account {
-                lamports: a["lamports"].as_u64().unwrap(),
-                data: B64.decode(a["data"][0].as_str().unwrap()).expect("b64"),
-                owner: pk(a["owner"].as_str().unwrap()),
-                executable: a["executable"].as_bool().unwrap(),
-                rent_epoch: a["rentEpoch"].as_u64().unwrap(),
-            },
-        );
-    }
-    Snapshot { program_id, controller, clock, map }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../titan/lending/tests/fixtures/snapshots/lending.json")
 }
 
 /// Wire the Jupiter Amm from the snapshot (cold `from_keyed_account` → `update`
-/// ingests the discovery set). Program id flows from the controller's owner, so
-/// everything resolves against the forge's id with nothing hardcoded.
+/// ingests the discovery set). Program id flows from the controller's owner.
 fn setup() -> (ReflectLendingAmm, Snapshot, ClockRef) {
-    assert!(fixture_path().exists(), "missing forged fixture {} - regenerate via reflect-core (see Titan parity docs); parity fixtures are mandatory", fixture_path().display());
-    let snap = load_snapshot();
+    let snap = Snapshot::load(&fixture_path(), CONTROLLER);
     let clock_ref: ClockRef = snap.clock.clone().into();
     let ctx = AmmContext { clock_ref: clock_ref.clone() };
-    let ka = KeyedAccount { key: snap.controller, account: snap.map.get(&snap.controller).expect("controller in snapshot").clone(), params: None };
+    let ka = KeyedAccount { key: snap.market, account: snap.map.get(&snap.market).expect("controller in snapshot").clone(), params: None };
 
     let mut amm = ReflectLendingAmm::from_keyed_account(&ka, &ctx).expect("from_keyed_account");
     amm.update(&snap.map).expect("update round 1");
@@ -94,15 +53,15 @@ fn setup() -> (ReflectLendingAmm, Snapshot, ClockRef) {
 
 /// Reflect SDK quote over the same bytes — the independent oracle both adapters
 /// delegate to. Rebuilds the loader exactly as the adapter does, using the
-/// SNAPSHOT program id (not a mainnet constant).
+/// SNAPSHOT program id.
 fn sdk_quote(snap: &Snapshot, input_mint: Pubkey, amount: u64, clock: &ClockRef) -> u64 {
     let pid = snap.program_id;
     let registry = pda::derive_pool_registry(&pid).0;
-    let ctrl = snap.map.get(&snap.controller).unwrap();
+    let ctrl = snap.map.get(&snap.market).unwrap();
     let reg = snap.map.get(&registry).unwrap();
     let keys = reflect_sdk::strategy::lending_discovery_keys(&ctrl.data, &reg.data, &pid).unwrap();
     let bytes: Vec<FetchedAccount> = keys.iter().filter_map(|k| snap.map.get(k).map(|a| FetchedAccount { key: *k, owner: a.owner, data: a.data.clone() })).collect();
-    let accts = Strategy::from_accounts(pid, snap.controller, bytes).unwrap();
+    let accts = Strategy::from_accounts(pid, snap.market, bytes).unwrap();
     let pair = accts.tradable_pair().unwrap();
     let output_mint = if input_mint == pair.deposit.pubkey { pair.receipt.pubkey } else { pair.deposit.pubkey };
     let rc = ReflectClock { slot: clock.slot.load(Ordering::Relaxed), unix_timestamp: clock.unix_timestamp.load(Ordering::Relaxed) };
@@ -112,15 +71,14 @@ fn sdk_quote(snap: &Snapshot, input_mint: Pubkey, amount: u64, clock: &ClockRef)
 /// The Jupiter adapter's quote must equal the reflect-sdk quote (= Titan's, =
 /// on-chain execution via the Titan suite). Both directions, swept amounts.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn jupiter_quote_equals_sdk() {
     let (amm, snap, clock) = setup();
     let mints = amm.get_reserve_mints();
     let (deposit, receipt) = (mints[0], mints[1]);
 
     for (in_mint, out_mint) in [(deposit, receipt), (receipt, deposit)] {
-        // Sub-cap mint band / sub-floor redeem band (mirrors the Titan sweep).
-        for amount in [1_000u64, 1_000_000, 100_000_000] {
+        // Inside both bands: the mainnet vault holds about 1.3 tokens.
+        for amount in [1_000u64, 100_000, 1_000_000] {
             let q = amm.quote(&QuoteParams { amount, input_mint: in_mint, output_mint: out_mint, swap_mode: SwapMode::ExactIn }).expect("jupiter quote");
             let sdk = sdk_quote(&snap, in_mint, amount, &clock);
             assert_eq!(q.out_amount, sdk, "jupiter quote != sdk quote for {in_mint}->{out_mint} amt {amount}");
@@ -128,15 +86,14 @@ async fn jupiter_quote_equals_sdk() {
     }
 }
 
-/// would_revert edge: past the mint cap the SDK predicts `CapExceeded`, so the
-/// Jupiter adapter returns `Err` (no route, not a bad route).
+/// would_revert edge: `u64::MAX` is past every mint ceiling, so the Jupiter
+/// adapter returns `Err` (no route, not a bad route).
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn jupiter_quote_errs_on_would_revert() {
     let (amm, _snap, _clock) = setup();
     let mints = amm.get_reserve_mints();
     let r = amm.quote(&QuoteParams { amount: u64::MAX, input_mint: mints[0], output_mint: mints[1], swap_mode: SwapMode::ExactIn });
-    assert!(r.is_err(), "u64::MAX past the cap must surface as Err, not a bad route");
+    assert!(r.is_err(), "u64::MAX must surface as Err, not a bad route");
 }
 
 /// GOLDEN: the `account_metas` ORDER from `get_swap_and_account_metas` is the
@@ -144,7 +101,6 @@ async fn jupiter_quote_errs_on_would_revert() {
 /// breaking. Asserts the structural shape (Reflect ix variant, user is the sole
 /// signer) and records the full order to stdout for the Jupiter handoff package.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn golden_account_metas_order() {
     let (amm, _snap, _clock) = setup();
     let mints = amm.get_reserve_mints();
