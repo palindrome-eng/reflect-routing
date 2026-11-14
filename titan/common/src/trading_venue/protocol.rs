@@ -8,7 +8,7 @@
 use std::fmt::Display;
 
 /// Identifies the protocol family of a trading venue.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PoolProtocol {
     /// Example/custom protocol placeholder.
     YourPoolProtocol,

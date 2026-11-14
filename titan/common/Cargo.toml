@@ -1,12 +1,13 @@
 [package]
 name = "reflect-titan-common"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Vendored Titan-Pathfinder integration-template TradingVenue contract, shared by every titan/<product> crate."
 
 [dependencies]
 # upstream Titan integration-template deps - the vendored TradingVenue trait
 async-trait = "0.1"
+borsh = { version = "1", features = ["derive"] }
 thiserror = "1"
 log = "0.4"
 solana-pubkey = "2.2"
@@ -22,6 +23,7 @@ litesvm = { version = "=0.6.1", optional = true }
 solana-sdk = { version = "2.2", optional = true }
 serde_json = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
+assert_no_alloc = { version = "1.1.2", default-features = false, optional = true }
 
 [features]
-harness = ["dep:litesvm", "dep:solana-sdk", "dep:serde_json", "dep:base64"]
+harness = ["dep:litesvm", "dep:solana-sdk", "dep:serde_json", "dep:base64", "dep:assert_no_alloc"]

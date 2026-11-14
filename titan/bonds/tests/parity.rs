@@ -2,251 +2,198 @@
 //! atom-exact, for every bond direction (asset→receipt mint, receipt→asset
 //! redeem, asset→asset swap), over an amount sweep.
 //!
-//! Regenerate:
-//! `cd reflect-core/programs/reflect-main && DUMP_FORGE_SNAPSHOT=<this crate>/tests/fixtures/forged_bond_basket.json cargo test --test index_forge_dump_tests`
+//! One program, `reflect_main.so`, the DUMPED mainnet binary, over a mainnet
+//! snapshot of one index strategy (see `SOURCES.md`).
+//!
+//! MANDATORY: a missing fixture is a test FAILURE, not a skip.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use litesvm::LiteSVM;
-use solana_account::Account;
-use solana_pubkey::Pubkey;
-use solana_sdk::clock::Clock as SolanaClock;
-use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::clock::Clock;
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 
+use reflect_sdk::strategy::ids::REFLECT_PROGRAM;
+
 use reflect_titan_bonds::ReflectBondVenue;
-use reflect_titan_common::account_caching::{AccountCacheError, AccountsCache};
-use reflect_titan_common::trading_venue::{FromAccount, QuoteRequest, SwapType, TradingVenue};
+use reflect_titan_common::harness::*;
+use reflect_titan_common::trading_venue::TradingVenue;
 
-fn manifest_rel(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+/// The index strategy in `snapshots/bond_basket.json`.
+const CONTROLLER: Pubkey = solana_sdk::pubkey!("9PugLepDrG7H5rThZM5bZPJGbRg3Pf6WmDk6vU2yb4dk");
+
+fn fixtures() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-fn fixture_path() -> PathBuf {
-    manifest_rel("tests/fixtures/forged_bond_basket.json")
+/// The main program dump lives with the lending suite; one copy serves both.
+fn main_program() -> Vec<u8> {
+    program_bytes(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../lending/tests/fixtures"), "reflect_main")
 }
 
-fn pk(s: &str) -> Pubkey {
-    s.parse().expect("pubkey")
-}
-
-/// Parsed fixture: the forge program id, the controller PDA, the deterministic
-/// user (LiteSVM verifies signatures, so the secret rides in the fixture), the
-/// forge Clock, and every forged account keyed by pubkey.
-struct Snapshot {
-    program_id: Pubkey,
-    controller: Pubkey,
-    user: Keypair,
-    clock: SolanaClock,
-    map: HashMap<Pubkey, Account>,
-}
-
-/// Read `forged_bond_basket.json` (the same cached-fixture shape as lending's
-/// `forged_reserve_kamino.json`). Synthesizes the Clock sysvar account from the
-/// dumped slot/unix so the adapter's `update_state` resolves CLOCK_SYSVAR.
-fn load_snapshot() -> Snapshot {
-    let raw = std::fs::read(fixture_path()).expect("read fixture");
-    let v: serde_json::Value = serde_json::from_slice(&raw).expect("parse fixture");
-
-    let program_id = pk(v["program_id"].as_str().unwrap());
-    let controller = pk(v["controller"].as_str().unwrap());
-    let user = Keypair::from_bytes(&B64.decode(v["user_secret"].as_str().unwrap()).unwrap()).expect("user keypair");
-    // No cloned external programs here (unlike lending's Kamino), so the forge
-    // clock is used verbatim: the synthetic oracles publish at 1_700_000_000
-    // with 300s staleness and the forge pins unix to +60.
-    let clock = SolanaClock { slot: v["slot"].as_u64().unwrap(), unix_timestamp: v["unix"].as_i64().unwrap(), ..Default::default() };
-
-    let mut map = HashMap::new();
-    for rec in v["accounts"].as_array().unwrap() {
-        let key = pk(rec["pubkey"].as_str().unwrap());
-        let a = &rec["account"];
-        let data = B64.decode(a["data"][0].as_str().unwrap()).expect("b64");
-        map.insert(
-            key,
-            Account {
-                lamports: a["lamports"].as_u64().unwrap(),
-                data,
-                owner: pk(a["owner"].as_str().unwrap()),
-                executable: a["executable"].as_bool().unwrap(),
-                rent_epoch: a["rentEpoch"].as_u64().unwrap(),
-            },
-        );
-    }
-
-    // The forge never pushes the Clock sysvar into its account store; the
-    // adapter fetches it for the quote timestamp. Synthesize it from the meta.
-    let clock_id = sdk_to_pk(&solana_sdk::sysvar::clock::ID);
-    map.insert(
-        clock_id,
-        Account { lamports: 1, data: bincode::serialize(&clock).expect("ser clock"), owner: sdk_to_pk(&solana_sdk::sysvar::id()), executable: false, rent_epoch: 0 },
-    );
-
-    Snapshot { program_id, controller, user, clock, map }
-}
-
-/// [`AccountsCache`] over the snapshot. Contract: order-preserving, miss → None.
-struct SnapshotCache {
-    map: HashMap<Pubkey, Account>,
-}
-
-#[async_trait]
-impl AccountsCache for SnapshotCache {
-    async fn get_account(&self, pubkey: &Pubkey) -> Result<Option<Account>, AccountCacheError> {
-        Ok(self.map.get(pubkey).cloned())
-    }
-    async fn get_accounts(&self, pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>, AccountCacheError> {
-        Ok(pubkeys.iter().map(|k| self.map.get(k).cloned()).collect())
-    }
-}
-
-// solana_account/solana_pubkey (adapter) and solana_sdk (litesvm) are the same
-// wire layout under unified 2.2, but distinct types; bridge by bytes regardless.
-fn sdk_key(k: &Pubkey) -> solana_sdk::pubkey::Pubkey {
-    solana_sdk::pubkey::Pubkey::new_from_array(k.to_bytes())
-}
-fn sdk_to_pk(k: &solana_sdk::pubkey::Pubkey) -> Pubkey {
-    Pubkey::new_from_array(k.to_bytes())
-}
-fn to_sdk_account(a: &Account) -> solana_sdk::account::Account {
-    solana_sdk::account::Account { lamports: a.lamports, data: a.data.clone(), owner: sdk_key(&a.owner), executable: a.executable, rent_epoch: a.rent_epoch }
-}
-
-/// A LiteSVM with the forged `reflect_main.so` loaded and every non-program
-/// forged account set; the Clock is warped to the forge meta. MANDATORY: a
-/// missing program fixture panics.
-fn load_svm(snap: &Snapshot) -> LiteSVM {
-    let so = std::fs::read(manifest_rel("tests/fixtures/programs/reflect_main.so"))
-        .unwrap_or_else(|_| panic!("no reflect_main.so - regenerate via reflect-core bond_forge_dump_tests; parity fixtures are mandatory"));
+/// The mainnet program over the snapshot, at the snapshot's own clock, and the venue
+/// quoting off that SAME state.
+async fn setup_live() -> (ReflectBondVenue, LiteSVM) {
+    let snap = snapshot(&fixtures(), "bond_basket");
     let mut svm = LiteSVM::new();
-    svm.add_program(sdk_key(&snap.program_id), &so);
+    svm.add_program(REFLECT_PROGRAM, &main_program());
+    load(&mut svm, &snap);
+    set_clock(&mut svm, &Clock { slot: snap.slot, unix_timestamp: snap.unix_timestamp, ..Default::default() });
+    let venue: ReflectBondVenue = venue_over(&SvmCache(&svm), &CONTROLLER).await;
+    assert!(venue.get_token_info().len() >= 3, "expected the receipt and at least two basket assets");
+    (venue, svm)
+}
 
-    let clock_id = sdk_to_pk(&solana_sdk::sysvar::clock::ID);
-    for (k, acc) in &snap.map {
-        if acc.executable || *k == clock_id {
+/// Whole tokens of each basket asset that [`setup`] mints into the strategy.
+const DEPTH_TOKENS: u64 = 100_000;
+
+/// [`setup_live`], then one committed mint of [`DEPTH_TOKENS`] of every basket asset through
+/// the program. The mainnet strategy holds under one dollar, which pays no redeem or swap of
+/// a routable size; the mints give every pool depth, so every direction of the basket runs.
+async fn setup() -> (ReflectBondVenue, LiteSVM) {
+    let (venue, mut svm) = setup_live().await;
+    let whale = funded_user(&mut svm);
+    let receipt = venue.get_token(0).unwrap().pubkey;
+    for asset in &venue.get_token_info()[1..] {
+        fund_direction(&mut svm, &whale, &venue, asset.pubkey, receipt);
+        let ix = venue.generate_swap_instruction(exact_in(asset.pubkey, receipt, DEPTH_TOKENS * 10u64.pow(asset.decimals as u32)), whale.pubkey()).expect("depth mint");
+        let tx = Transaction::new_signed_with_payer(&[ComputeBudgetInstruction::set_compute_unit_limit(1_400_000), ix], Some(&whale.pubkey()), &[&whale], svm.latest_blockhash());
+        svm.send_transaction(tx).unwrap_or_else(|e| panic!("depth mint of {} failed: {:?}\n{}", asset.pubkey, e.err, e.meta.logs.join("\n")));
+        svm.expire_blockhash();
+    }
+    let venue: ReflectBondVenue = venue_over(&SvmCache(&svm), &CONTROLLER).await;
+    let n = venue.get_token_info().len();
+    assert_eq!(venue.directions_num().len(), n * (n - 1), "every direction of the deepened basket must quote");
+    (venue, svm)
+}
+
+/// Sweep every token pair of `venue` over its own bounds: the dest delta equals the quote,
+/// atom-exact. A pair with no bounds must quote no-liquidity. Returns the count of executed
+/// `(mint, redeem, swap)` directions.
+fn sweep(venue: &ReflectBondVenue, svm: &mut LiteSVM) -> (usize, usize, usize) {
+    let user = funded_user(svm);
+    let receipt = venue.get_token(0).unwrap().pubkey;
+    let mut rng = Rng::new(0x626f_6e64_5345_4544);
+    let (mut mints, mut redeems, mut swaps) = (0, 0, 0);
+    let n = venue.get_token_info().len() as u8;
+
+    for (i, j) in (0..n).flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j))) {
+        let (in_mint, out_mint) = (venue.get_token(i as usize).unwrap().pubkey, venue.get_token(j as usize).unwrap().pubkey);
+        let Ok((lb, ub)) = venue.bounds(i, j) else {
+            let q = venue.quote(exact_in(in_mint, out_mint, 1_000_000)).expect("quote");
+            assert!(q.not_enough_liquidity, "{in_mint}->{out_mint}: no bounds, so the quote must flag no-liquidity");
             continue;
+        };
+        let mut amounts = vec![lb, ub];
+        amounts.extend((0..6).map(|_| rng.log_uniform(lb, ub)));
+        for amount in amounts {
+            let req = exact_in(in_mint, out_mint, amount);
+            let quote = venue.quote(req.clone()).expect("quote");
+            assert!(!quote.not_enough_liquidity && quote.expected_output > 0, "{amount} {in_mint}->{out_mint} is inside the bounds {lb}..={ub}");
+            // The source holds `u64::MAX` and the destination is empty before each run.
+            fund_direction(svm, &user, venue, in_mint, out_mint);
+            let (spent, gained) = simulate(svm, venue, &user, req).unwrap_or_else(|| panic!("{amount} {in_mint}->{out_mint} did not execute"));
+            assert_eq!(gained, quote.expected_output, "dest delta != quote ({amount} {in_mint}->{out_mint})");
+            // Mint and redeem may consume LESS than the request: the deposit allocator clamps
+            // a single-sided deposit to the basket's imbalance caps, and the receipt-exact
+            // redeem re-derives the burn from the achieved gross. Only overspend is a bug.
+            assert!(spent <= amount, "source overspent ({amount} {in_mint}->{out_mint})");
+            if in_mint != receipt && out_mint != receipt {
+                assert_eq!(spent, amount, "swap must consume the exact input ({amount} {in_mint}->{out_mint})");
+            }
         }
-        let _ = svm.set_account(sdk_key(k), to_sdk_account(acc));
-    }
-    svm.set_sysvar::<SolanaClock>(&snap.clock);
-    svm
-}
-
-/// Build the venue from the forged controller and `update_state` it off the
-/// snapshot. Returns (venue, snapshot, receipt mint, basket asset mints).
-///
-/// Basket slot 0 is ALWAYS USDC: `add_asset` requires it, the forge lists it
-/// at zero weight and never funds its pool. So `assets[0]` mints but has no
-/// redeem depth, and `assets[1..]` are the weighted, funded legs.
-async fn setup() -> (ReflectBondVenue, Snapshot, Pubkey, Vec<Pubkey>) {
-    let snap = load_snapshot();
-    let ctrl = snap.map.get(&snap.controller).expect("controller in fixture").clone();
-    let mut venue = ReflectBondVenue::from_account(&snap.controller, &ctrl).expect("from_account");
-    let cache = SnapshotCache { map: snap.map.clone() };
-    venue.update_state(&cache).await.expect("update_state");
-
-    // mints() = [receipt, asset_0..n] - the venue's documented order.
-    let toks: Vec<Pubkey> = venue.get_token_info().iter().map(|t| t.pubkey).collect();
-    assert_eq!(toks.len(), 4, "expected receipt + USDC slot 0 + 2 weighted assets, got {}", toks.len());
-    (venue, snap, toks[0], toks[1..].to_vec())
-}
-
-fn user_ata(user: &Keypair, mint: &Pubkey) -> solana_sdk::pubkey::Pubkey {
-    spl_associated_token_account::get_associated_token_address(&user.pubkey(), &sdk_key(mint))
-}
-
-fn token_balance(svm: &LiteSVM, ata: solana_sdk::pubkey::Pubkey) -> u64 {
-    use solana_program_pack::Pack;
-    let acc = svm.get_account(&ata).expect("ata exists");
-    spl_token::state::Account::unpack(&acc.data).expect("token account").amount
-}
-
-/// Quote `amount` of `in_mint` → `out_mint`, execute the adapter-built ix in a
-/// FRESH svm off the snapshot, and assert the user's dest delta equals the
-/// quote atom-exact (plus the ExactIn source contract).
-fn assert_direction(venue: &ReflectBondVenue, snap: &Snapshot, in_mint: Pubkey, out_mint: Pubkey, amount: u64) {
-    let req = QuoteRequest { input_mint: in_mint, output_mint: out_mint, amount, swap_type: SwapType::ExactIn };
-    let quote = venue.quote(req.clone()).expect("quote");
-    assert!(!quote.not_enough_liquidity, "expected liquidity for {amount} {in_mint}->{out_mint}");
-    assert!(quote.expected_output > 0);
-
-    let ix = venue.generate_swap_instruction(req, sdk_to_pk(&snap.user.pubkey())).expect("build");
-    let mut svm = load_svm(snap);
-    svm.airdrop(&snap.user.pubkey(), 1_000_000_000).expect("airdrop");
-
-    let (src, dst) = (user_ata(&snap.user, &in_mint), user_ata(&snap.user, &out_mint));
-    let (src_before, dst_before) = (token_balance(&svm, src), token_balance(&svm, dst));
-
-    let sdk_ix = solana_sdk::instruction::Instruction {
-        program_id: sdk_key(&ix.program_id),
-        accounts: ix.accounts.iter().map(|m| solana_sdk::instruction::AccountMeta { pubkey: sdk_key(&m.pubkey), is_signer: m.is_signer, is_writable: m.is_writable }).collect(),
-        data: ix.data.clone(),
-    };
-    // The forge harness ran Mollusk with a 256KiB heap and bond flows burn
-    // ~200k CU; request both so LiteSVM matches.
-    let heap = solana_sdk::compute_budget::ComputeBudgetInstruction::request_heap_frame(256 * 1024);
-    let cu = solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
-    let tx = Transaction::new_signed_with_payer(&[heap, cu, sdk_ix], Some(&snap.user.pubkey()), &[&snap.user], svm.latest_blockhash());
-    if let Err(e) = svm.send_transaction(tx) {
-        for l in &e.meta.logs {
-            eprintln!("    {l}");
+        match (in_mint == receipt, out_mint == receipt) {
+            (false, true) => mints += 1,
+            (true, false) => redeems += 1,
+            _ => swaps += 1,
         }
-        panic!("execution failed for {amount} {in_mint}->{out_mint}: {:?}", e.err);
+        eprintln!("parity ok: {in_mint}->{out_mint} over {lb}..={ub}");
     }
-
-    let dst_delta = token_balance(&svm, dst) - dst_before;
-    let src_delta = src_before - token_balance(&svm, src);
-    assert_eq!(dst_delta, quote.expected_output, "dest delta != quote ({amount} {in_mint}->{out_mint})");
-    // Mint and redeem legs may consume LESS than the request: the deposit
-    // allocator clamps a single-sided deposit to the basket's imbalance caps,
-    // and the constructed receipt-exact redeem re-derives the burn from the
-    // achieved gross. Quote and execution clamp identically (the dest assert
-    // above is the proof); only overspend is a bug. Swap is spend-exact.
-    assert!(src_delta <= amount, "source overspent ({amount} {in_mint}->{out_mint})");
-    let toks = venue.get_token_info();
-    let receipt = toks[0].pubkey;
-    if in_mint != receipt && out_mint != receipt {
-        assert_eq!(src_delta, amount, "swap must consume the exact input ({amount} {in_mint}->{out_mint})");
-    }
+    (mints, redeems, swaps)
 }
 
-/// Every direction of the basket, swept: asset→receipt (mint), receipt→asset
-/// (constructed receipt-exact redeem), asset→asset (swap). The unfunded USDC
-/// slot 0 only mints.
+/// The strategy exactly as it is on mainnet: every pair it can pay executes at the quote.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
-async fn parity_all_directions_swept() {
-    let (venue, snap, receipt, assets) = setup().await;
-    let (usdc, a, b) = (assets[0], assets[1], assets[2]);
+async fn parity_mainnet_state_swept() {
+    let (venue, mut svm) = setup_live().await;
+    let (mints, redeems, swaps) = sweep(&venue, &mut svm);
+    eprintln!("directions executed: {mints} mint, {redeems} redeem, {swaps} swap");
+    assert_eq!(mints, venue.get_token_info().len() - 1, "every basket asset must mint");
+}
 
-    for amount in [1_000u64, 250_000, 5_000_000] {
-        assert_direction(&venue, &snap, usdc, receipt, amount); // mint through slot 0
-        assert_direction(&venue, &snap, a, receipt, amount); // mint
-        assert_direction(&venue, &snap, receipt, a, amount); // redeem
-        assert_direction(&venue, &snap, a, b, amount); // swap
-        assert_direction(&venue, &snap, b, a, amount); // swap back
-    }
+/// Every direction of the deepened basket: asset→receipt (mint), receipt→asset (redeem),
+/// asset→asset (swap).
+#[tokio::test(flavor = "current_thread")]
+async fn parity_all_directions_swept() {
+    let (venue, mut svm) = setup().await;
+    let assets = venue.get_token_info().len() - 1;
+    assert_eq!(sweep(&venue, &mut svm), (assets, assets, assets * (assets - 1)));
 }
 
 /// An absurd request maps to no-liquidity (never a lying quote), and the venue
 /// stays quote-consistent on the zero edge (`bounds()` relies on both).
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs the forge fixtures from reflect-core (see the file header); not committed"]
 async fn edges_zero_and_overask() {
-    let (venue, snap, receipt, assets) = setup().await;
-    let _ = snap;
+    let (venue, _svm) = setup().await;
+    let (receipt, asset) = (venue.get_token(0).unwrap().pubkey, venue.get_token(1).unwrap().pubkey);
 
-    let zero = venue.quote(QuoteRequest { input_mint: assets[0], output_mint: receipt, amount: 0, swap_type: SwapType::ExactIn }).expect("zero quote");
+    let zero = venue.quote(exact_in(asset, receipt, 0)).expect("zero quote");
     assert_eq!(zero.expected_output, 0);
     assert!(!zero.not_enough_liquidity, "zero input is routable-with-zero-output");
+    // Titan `price`: a positive spot at zero input that, on the linear mint, prices a
+    // real fill to within Titan's 1e-5 mean-value tolerance.
+    assert!(zero.price > 0.0, "spot must be positive, got {}", zero.price);
+    let q = venue.quote(exact_in(asset, receipt, 1_000_000)).expect("probe quote");
+    assert!((q.price * 1_000_000.0 - q.expected_output as f64).abs() <= q.expected_output as f64 * 1e-5 + 1.0, "price {} vs out {} at 1_000_000", q.price, q.expected_output);
 
-    let over = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[1], amount: u64::MAX, swap_type: SwapType::ExactIn }).expect("over quote");
+    let over = venue.quote(exact_in(receipt, asset, u64::MAX)).expect("over quote");
     assert!(over.not_enough_liquidity, "over-ask must flag no-liquidity");
+}
 
-    // The unfunded slot-0 pool has nothing to pay out: a redeem into it is a
-    // predicted revert, so no liquidity rather than a lying quote.
-    let usdc = venue.quote(QuoteRequest { input_mint: receipt, output_mint: assets[0], amount: 1_000, swap_type: SwapType::ExactIn }).expect("usdc quote");
-    assert!(usdc.not_enough_liquidity, "redeem into the empty slot-0 pool must flag no-liquidity");
+/// Titan's shared correctness contract (upstream `tests/common`) over the mainnet basket.
+#[tokio::test(flavor = "current_thread")]
+async fn titan_contract() {
+    let (venue, mut svm) = setup().await;
+    assert_titan_contract(&mut svm, &venue, 0x7174_616e_5345_4544);
+}
+
+// Titan's allocation guard: active in debug builds, where `assert_no_alloc` aborts on a heap
+// allocation inside the guarded closure; release builds (the speed test) run unguarded.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static A: AllocDisabler = AllocDisabler;
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn quotes_do_not_allocate() {
+    let (venue, _svm) = setup().await;
+    assert_quotes_do_not_allocate(&venue);
+}
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn quote_speed() {
+    let (venue, _svm) = setup().await;
+    assert_quote_speed(&venue, 0x7174_616e_5345_4544, 1_000.0);
+}
+
+/// Every basket direction executes inside the route program under TitanPDA custody.
+#[tokio::test(flavor = "current_thread")]
+async fn titan_route() {
+    let Some(router) = router_program() else { return };
+    let (venue, mut svm) = setup().await;
+    assert_titan_route(&mut svm, &venue, &router);
+}
+
+/// Rewrite `snapshots/bond_basket.json` from mainnet: `RPC_URL=<url> cargo test -p
+/// reflect-titan-bonds --test parity capture_snapshot -- --ignored`.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "network: rewrites the snapshot from mainnet"]
+async fn capture_snapshot() {
+    let cache = RpcCache::new(&std::env::var("RPC_URL").expect("RPC_URL"));
+    let venue: ReflectBondVenue = venue_over(&cache, &CONTROLLER).await;
+    capture(&cache, &venue, &fixtures(), "bond_basket");
 }

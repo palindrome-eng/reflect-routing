@@ -20,7 +20,8 @@ use solana_sdk::clock::Clock;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
-use reflect_sdk::proxy::ids::{PROXY_PROGRAM, PROXY_STAGING_PROGRAM};
+use reflect_sdk::proxy::ids::PROXY_PROGRAM;
+const PROXY_STAGING_PROGRAM: Pubkey = Pubkey::from_str_const("HvX27r2MoKn6oakkmcAgMo5ZFhheGKQ5Ht2KL3sk5ANM");
 use reflect_sdk::proxy::ProxyStateView;
 
 use reflect_titan_common::harness::*;
@@ -142,6 +143,12 @@ async fn edges(fx: &mut Fx, stale: Clock, expected_log: &str) {
     for (a, b) in [(fx.stablecoin, fx.branded), (fx.branded, fx.stablecoin)] {
         let z = v.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 0, swap_type: SwapType::ExactIn }).unwrap();
         assert_eq!((z.expected_output, z.not_enough_liquidity), (0, false), "amount 0 is not a liquidity failure");
+        // Titan `price`: a positive spot at zero input that, on this linear route, prices
+        // a real fill to within Titan's 1e-5 mean-value tolerance.
+        assert!(z.price > 0.0, "spot must be positive, got {}", z.price);
+        let q = v.quote(QuoteRequest { input_mint: a, output_mint: b, amount: 1_000_000, swap_type: SwapType::ExactIn }).unwrap();
+        assert!(!q.not_enough_liquidity, "1_000_000 fills on both markets");
+        assert!((q.price * 1_000_000.0 - q.expected_output as f64).abs() <= q.expected_output as f64 * 1e-5 + 1.0, "price {} vs out {} at 1_000_000", q.price, q.expected_output);
     }
     let fresh =
         v.generate_swap_instruction(QuoteRequest { input_mint: fx.stablecoin, output_mint: fx.branded, amount: 1_000_000, swap_type: SwapType::ExactIn }, user.pubkey()).unwrap();
@@ -166,4 +173,66 @@ async fn staging_edges_agree_with_the_program() {
     let mut fx = boot("proxy_staging", PROXY_STAGING_PROGRAM);
     let stale = Clock { unix_timestamp: fx.clock.unix_timestamp + 600, ..fx.clock.clone() };
     edges(&mut fx, stale, "custom program error: 0xd").await;
+}
+
+/// Titan's shared correctness contract (upstream `tests/common`), both markets.
+#[tokio::test(flavor = "current_thread")]
+async fn prod_titan_contract() {
+    let mut fx = boot("proxy_prod", PROXY_PROGRAM);
+    let v = fx.venue().await;
+    assert_titan_contract(&mut fx.svm, &v, 0x7174_616e_5345_4544);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn staging_titan_contract() {
+    let mut fx = boot("proxy_staging", PROXY_STAGING_PROGRAM);
+    let v = fx.venue().await;
+    assert_titan_contract(&mut fx.svm, &v, 0x7174_616e_5345_4544);
+}
+
+// Titan's allocation guard: active in debug builds, where `assert_no_alloc` aborts on a heap
+// allocation inside the guarded closure; release builds (the speed test) run unguarded.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static A: reflect_titan_common::harness::AllocDisabler = reflect_titan_common::harness::AllocDisabler;
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn prod_quotes_do_not_allocate() {
+    let fx = boot("proxy_prod", PROXY_PROGRAM);
+    let v = fx.venue().await;
+    assert_quotes_do_not_allocate(&v);
+}
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn staging_quotes_do_not_allocate() {
+    let fx = boot("proxy_staging", PROXY_STAGING_PROGRAM);
+    let v = fx.venue().await;
+    assert_quotes_do_not_allocate(&v);
+}
+
+/// Titan's performance contract (upstream `construction` / `quoting_speed`).
+#[tokio::test(flavor = "current_thread")]
+async fn prod_quote_speed() {
+    let fx = boot("proxy_prod", PROXY_PROGRAM);
+    let v = fx.venue().await;
+    assert_quote_speed(&v, 0x7174_616e_5345_4544, 1_000.0);
+}
+
+/// Wrap and unwrap execute inside the route program under TitanPDA custody.
+#[tokio::test(flavor = "current_thread")]
+async fn prod_titan_route() {
+    let Some(router) = router_program() else { return };
+    let mut fx = boot("proxy_prod", PROXY_PROGRAM);
+    let v = fx.venue().await;
+    assert_titan_route(&mut fx.svm, &v, &router);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn staging_titan_route() {
+    let Some(router) = router_program() else { return };
+    let mut fx = boot("proxy_staging", PROXY_STAGING_PROGRAM);
+    let v = fx.venue().await;
+    assert_titan_route(&mut fx.svm, &v, &router);
 }

@@ -14,7 +14,7 @@ use solana_pubkey::Pubkey;
 use reflect_sdk::common::ids::TOKEN_PROGRAM;
 use reflect_sdk::common::Now;
 
-use reflect_routing_core::{MintInfo, RlpVenue};
+use reflect_routing_core::{marginal_price, MintInfo, RlpVenue};
 
 use reflect_titan_common::account_caching::AccountsCache;
 use reflect_titan_common::trading_venue::{
@@ -97,6 +97,13 @@ impl TradingVenue for ReflectRlpVenue {
         &self.tokens
     }
 
+    /// Routable pairs only: asset -> LP (deposit) and asset -> asset (swap). LP as input
+    /// is the cooldown withdrawal, which the default all-pairs set would hand to `bounds()`.
+    fn directions_num(&self) -> Vec<(u8, u8)> {
+        let n = self.tokens.len() as u8;
+        (1..n).flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j))).collect()
+    }
+
     fn get_required_pubkeys_for_update(&self) -> Result<Vec<Pubkey>, TradingVenueError> {
         Ok(self.keys.clone())
     }
@@ -124,6 +131,7 @@ impl TradingVenue for ReflectRlpVenue {
         // Round 3: load (missing non-seed accounts tolerated by filter_map;
         // load() itself errors on anything it actually needs).
         self.venue.load(keys.iter().zip(datas).filter_map(|(k, a)| a.map(|a| (*k, a.owner, a.data)))).map_err(venue_err)?;
+        self.venue.settle(self.clock).map_err(venue_err)?;
 
         self.tokens = self.venue.mints().into_iter().map(to_token_info).collect();
         if self.tokens.len() < 2 {
@@ -142,10 +150,15 @@ impl TradingVenue for ReflectRlpVenue {
         // Zero input → clean 0 (never panics). A predicted revert (killswitch,
         // role, stale oracle, cap, swap inventory) or any quote error maps to
         // no-liquidity - exactly what bounds() and not_enough_liquidity expect.
-        let expected_output = match self.venue.quote(request.input_mint, request.output_mint, request.amount, self.clock) {
-            Ok(Some(q)) => q.amount_out,
-            _ => 0,
+        let q = |amount: u64| match self.venue.quote(request.input_mint, request.output_mint, amount, self.clock) {
+            Ok(Some(q)) => Some(q.amount_out),
+            _ => None,
         };
+        let expected_output = q(request.amount).unwrap_or(0);
+        // Titan reads the venue's rate regardless of whether this size fills: the marginal
+        // at `amount`, else the spot; `0.0` only when the market has no route at all.
+        let probe = 10u64.pow(self.get_token_info().iter().find(|t| t.pubkey == request.input_mint).map_or(0, |t| t.decimals as u32));
+        let price = marginal_price(q, request.amount, expected_output, probe).or_else(|| marginal_price(q, 0, 0, probe)).unwrap_or(0.0);
 
         Ok(QuoteResult {
             input_mint: request.input_mint,
@@ -153,6 +166,7 @@ impl TradingVenue for ReflectRlpVenue {
             amount: request.amount,
             expected_output,
             not_enough_liquidity: expected_output == 0 && request.amount > 0,
+            price,
         })
     }
 

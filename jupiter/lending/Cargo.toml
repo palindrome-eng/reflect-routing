@@ -12,10 +12,9 @@ solana-sdk = "2.2"
 anyhow = "1"
 
 # parity.rs asserts quote==sdk + the golden account-meta order. Hermetic: it
-# consumes the SAME committed forged fixture as the Titan suite
-# (titan/lending/tests/fixtures/forged_reserve_save.json), so it runs fully
-# offline. serde_json/base64 parse the fixture JSON shape.
+# consumes the SAME committed mainnet snapshot as the Titan suite
+# (titan/lending/tests/fixtures/snapshots/lending.json), so it runs fully
+# offline.
 [dev-dependencies]
-serde_json = "1"
-base64 = "0.22"
+reflect-jupiter-common = { path = "../common", features = ["fixtures"] }
 tokio = { version = "1", features = ["rt", "macros"] }

@@ -1,9 +1,11 @@
-//! `reflect-titan-common` — the vendored `Titan-Pathfinder/integration-template`
-//! contract (the `TradingVenue` trait + supporting types), shared by every
+//! `reflect-titan-common` - the vendored `Titan-Pathfinder/integration-template`
+//! contract (the `TradingVenue` trait + supporting types) at upstream main
+//! `c0bb5c9` (2026-06-25: marginal `QuoteResult::price`, `directions_num`,
+//! `venue_creation`), shared by every
 //! `titan/<product>` crate so it is copied exactly once, not once per product.
 //!
 //! The RPC-backed cache helper from the upstream template is deliberately
-//! omitted — the framework supplies its own [`account_caching::AccountsCache`].
+//! omitted - the framework supplies its own [`account_caching::AccountsCache`].
 //! Each `titan/<product>` crate depends on this crate and adds only its own
 //! concrete `Reflect<Product>Venue` (in its own `reflect.rs`); `PoolProtocol`
 //! (in [`trading_venue::protocol`]) carries one variant per product. The
@@ -12,4 +14,5 @@
 pub mod account_caching;
 #[cfg(feature = "harness")]
 pub mod harness;
+pub mod swap_route;
 pub mod trading_venue;

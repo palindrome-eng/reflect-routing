@@ -15,10 +15,10 @@ use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
 use reflect_sdk::common::Now;
-use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyStateView, Whitelabel};
+use reflect_sdk::proxy::{asset_key, state_keys, AssetView, FetchedAccount, ProxyCore, ProxyStateView, Whitelabel};
 use reflect_sdk::strategy::MintInfo;
 
-use crate::{spl_mint_info, RouteQuote};
+use crate::{spl_mint_info, RouteQuote, Settled};
 
 /// Which branded-pair op an input mint maps to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,13 +44,15 @@ pub struct WhitelabelVenue {
     market: Pubkey,
     loaded: Option<Arc<Whitelabel>>,
     mints: Option<[MintInfo; 2]>, // [stablecoin (idx 0), branded (idx 1)]
+    /// The market settled for quoting; see [`Settled`].
+    core: Settled<ProxyCore>,
 }
 
 impl WhitelabelVenue {
     /// Construct cold from the `ProxyState` account the aggregator lists:
     /// `market` is its key, `program_id` its owner (mainnet or staging proxy).
     pub fn from_market(program_id: Pubkey, market: Pubkey) -> Self {
-        Self { program_id, market, loaded: None, mints: None }
+        Self { program_id, market, loaded: None, mints: None, core: Settled::NONE }
     }
 
     /// The owning proxy program id.
@@ -136,6 +138,17 @@ impl WhitelabelVenue {
         self.loaded.as_deref().context("venue not loaded")
     }
 
+    /// Settle the loaded market at `now`: resolves the oracle chain once so every quote is
+    /// arithmetic over owned state. A price that does not resolve leaves no core, which
+    /// `quote` reports as no route.
+    ///
+    /// # Errors
+    /// If the venue isn't loaded.
+    pub fn settle(&mut self, now: Now) -> Result<()> {
+        self.core.set(now, self.loaded()?.core(now).ok());
+        Ok(())
+    }
+
     /// Classify the input mint.
     pub fn route(&self, input_mint: Pubkey) -> Result<WhitelabelRoute> {
         let m = self.mints.as_ref().context("venue not loaded")?;
@@ -148,8 +161,9 @@ impl WhitelabelVenue {
         }
     }
 
-    /// Quote `amount` of `input_mint` into its counterpart, ExactIn. `None` is
-    /// "no route": the SDK predicts the revert the program would raise.
+    /// Quote `amount` of `input_mint` into its counterpart, ExactIn, from the core
+    /// [`settle`](Self::settle) left. `None` is "no route": the SDK predicts the revert the
+    /// program would raise, or the market is unsettled at this clock.
     /// `amount == 0` returns `Some(zero)` before touching state.
     ///
     /// `fee` is ALWAYS 0: the crank folds the integrator fee into principal
@@ -161,12 +175,19 @@ impl WhitelabelVenue {
         if amount == 0 {
             return Ok(Some(RouteQuote { amount_out: 0, fee: 0 }));
         }
-        let accts = self.loaded()?;
-        let output_mint = match self.route(input_mint)? {
-            WhitelabelRoute::Wrap => accts.branded_mint(),
-            WhitelabelRoute::Unwrap => accts.stablecoin_mint(),
+        let loaded = self.loaded()?;
+        let route = self.route(input_mint)?;
+        let Some(k) = self.core.at(clock, || loaded.core(clock).ok()) else { return Ok(None) };
+        // The branded mint's `u64` supply is a ceiling the proxy math does not see: `MintTo`
+        // overflows past it and `Burn` underflows below it. Both are program reverts, so both
+        // are "no route" here, which keeps `bounds()` inside what executes.
+        // ponytail: lives here until the SDK's wrap/unwrap quotes model the SPL supply ceiling.
+        let supply = k.vault().branded_supply;
+        let out = match route {
+            WhitelabelRoute::Wrap => k.quote_wrap(amount, 1).ok().map(|q| q.minted).filter(|out| supply.checked_add(*out).is_some()),
+            WhitelabelRoute::Unwrap => (amount <= supply).then(|| k.quote_unwrap(amount, 1).ok().map(|q| q.out)).flatten(),
         };
-        Ok(accts.quote(input_mint, output_mint, amount, clock).ok().map(|q| RouteQuote { amount_out: q.amount_out, fee: 0 }))
+        Ok(out.map(|amount_out| RouteQuote { amount_out, fee: 0 }))
     }
 
     /// Build the wrap/unwrap instruction; `min_out` is baked from
@@ -209,13 +230,17 @@ mod tests {
         b[114] = bump;
         b
     }
-    // Asset, prod layout (98 B): stablecoin(32) oracle(32)@32 active@64 bump@65 feed_id(32)@66.
+    // Asset (259 B): stablecoin(32) active@32 bump@33 leg_count@34 version@35 flags@38 legs@40;
+    // a leg is oracle(32) feed_id(32) and 9 B of bounds.
     fn asset_buf(stablecoin: &Pubkey, oracle: &Pubkey, active: bool) -> Vec<u8> {
-        let mut b = vec![0u8; 98];
+        let mut b = vec![0u8; 259];
         b[0..32].copy_from_slice(stablecoin.as_ref());
-        b[32..64].copy_from_slice(oracle.as_ref());
-        b[64] = active as u8;
-        b[66..98].copy_from_slice(oracle.as_ref()); // feed_id == oracle key, matched below
+        b[32] = active as u8;
+        b[34] = 1;
+        b[35] = 2;
+        b[38] = 1;
+        b[40..72].copy_from_slice(oracle.as_ref());
+        b[72..104].copy_from_slice(oracle.as_ref()); // feed_id == oracle key, matched below
         b
     }
     fn mint_buf(supply: u64, decimals: u8) -> Vec<u8> {
